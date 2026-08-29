@@ -1,7 +1,7 @@
 name = "AudioPlugins"
 uuid = "83119930-5344-4127-8689-15f5870d6d1a"
 authors = ["JuliaHub, Inc. and contributors"]
-version = "0.1.0"
+version = "1.0.0"
 
 [compat]
 julia = "1.10"
