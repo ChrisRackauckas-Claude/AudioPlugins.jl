@@ -34,6 +34,9 @@
 #include "public.sdk/source/vst/utility/stringconvert.h"
 
 #include <cmath>
+#ifndef M_PI                     /* MinGW's <cmath> hides it without _USE_MATH_DEFINES */
+#define M_PI 3.14159265358979323846
+#endif
 #include <cstdarg>
 #include <cstdio>
 #include <cstring>
