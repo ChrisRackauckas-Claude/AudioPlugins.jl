@@ -16,6 +16,30 @@ Two formats:
 | **LV2** | ISC | audio path implemented (`connect_port` / `run`); **discovery is not**, see below |
 | VST3 | MIT since SDK 3.8 | not yet implemented |
 
+## How the host is shipped
+
+The C host (`csrc/clap_host.c`) is built by [Yggdrasil](https://github.com/JuliaPackaging/Yggdrasil)
+and shipped prebuilt as `CLAPHost_jll`, so using this package needs no C toolchain
+and writes nothing into the package directory. The JLL is *in addition to* `csrc/`,
+not a replacement: the sources stay in the repository because a generated
+standalone C program links `clap_host.c` directly, with no Julia present.
+`clap_lib_path()` gives the prebuilt library's absolute path and `clap_src_path()`
+the source it was built from; `CLAPHost_jll`'s version tracks the release of this
+package whose `csrc/` it was built from.
+
+The only thing that needs a C compiler is building the *test* plugins
+(`clap_test_bundle()`), and those go into a per-package scratch space, so a
+read-only installation hosts plugins fine and fails only at test time, with a
+message that says so.
+
+To work on `csrc/clap_host.c` itself, build it locally and point the JLL at your
+build through a preference, then restart Julia:
+
+```julia
+using Preferences, CLAPHost_jll
+set_preferences!(CLAPHost_jll, "libclap_host_path" => "/path/to/libclap_host.so")
+```
+
 ## Why the API looks like C rather than like Julia
 
 The host is deliberately a thin layer over named `ccall`s into a shared library at a fixed
