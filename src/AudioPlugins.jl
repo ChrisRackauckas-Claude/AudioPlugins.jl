@@ -20,6 +20,9 @@ The processing contract, which every plugin format shares:
   * scalar parameters that may change per block.
 
 Headless only: no plugin GUI is ever loaded.
+
+The C host is shipped prebuilt by `CLAPHost_jll`; the sources under `csrc/`
+stay in the package for a generated C program to link directly.
 """
 module AudioPlugins
 
