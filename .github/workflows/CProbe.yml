@@ -13,7 +13,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install lilv (for the LV2 host) and the LV2 example plugins
-        run: sudo apt-get update && sudo apt-get install -y liblilv-dev lv2-dev lv2-examples
+        run: sudo apt-get update && sudo apt-get install -y cmake build-essential liblilv-dev lv2-dev lv2-examples
       - name: CLAP
         run: |
           cc -std=gnu99 -O2 -fPIC -shared -Wall -Wextra -o ap_test.clap test/plugins/ap_test_plugins.c
