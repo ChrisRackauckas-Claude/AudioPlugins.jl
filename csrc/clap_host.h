@@ -20,8 +20,9 @@
  * benign for offline work and is documented rather than hidden.
  *
  * CLAP is MIT and header-only: there is nothing to link, the host dlopen()s
- * the plugin bundle and talks to it through the vendored declarations in
- * vendor/clap (1.2.10, see vendor/PROVENANCE.md). That is the whole
+ * (LoadLibrary()s, on Windows) the plugin bundle and talks to it through
+ * the vendored declarations in vendor/clap (1.2.10, see
+ * vendor/PROVENANCE.md). That is the whole
  * dependency -- no C++ compiler, no JLL, no system package.
  *
  * Two properties are load-bearing and asserted by the tests, the same two
