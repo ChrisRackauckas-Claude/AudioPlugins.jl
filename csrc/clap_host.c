@@ -12,7 +12,13 @@
 #include "clap_host.h"
 #include "vendor/clap/clap.h"
 
-#include <dlfcn.h>
+#ifdef _WIN32
+#  define WIN32_LEAN_AND_MEAN
+#  define NOMINMAX
+#  include <windows.h>
+#else
+#  include <dlfcn.h>
+#endif
 #include <math.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -167,10 +173,61 @@ static const clap_output_events_t OUT_EV = { .ctx = NULL, .try_push = out_ev_pus
  * 5. Discovery
  * ---------------------------------------------------------------- */
 
-/* A .clap bundle is a shared object; on macOS it is a directory bundle
- * whose binary lives at Contents/MacOS/<name>. Resolve both shapes. */
+/* dlopen(RTLD_LOCAL | RTLD_NOW) and friends, spelled with LoadLibrary on
+ * Windows, where those two flags describe the only behaviour the loader has. */
+#ifdef _WIN32
+
+static char    DLERR[256];
+static wchar_t WPATH[4096], WFULL[4096];
+
+static void set_dlerr_from_last_error(void) {
+    DWORD code = GetLastError();
+    DWORD n = FormatMessageA(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
+                             NULL, code, 0, DLERR, sizeof DLERR, NULL);
+    while (n > 0 && (DLERR[n - 1] == '\r' || DLERR[n - 1] == '\n' || DLERR[n - 1] == ' '))
+        DLERR[--n] = '\0';
+    if (n == 0) snprintf(DLERR, sizeof DLERR, "Windows error %lu", (unsigned long)code);
+}
+
+/* Paths arrive as UTF-8, which only the wide API accepts in full.
+ * LOAD_WITH_ALTERED_SEARCH_PATH lets a plugin find sibling DLLs next to
+ * itself, as a DAW would, and is defined only for a full path. */
+static void *host_dlopen(const char *path) {
+    DLERR[0] = '\0';
+    int n = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, path, -1,
+                                WPATH, (int)(sizeof WPATH / sizeof WPATH[0]));
+    if (n <= 0) { set_dlerr_from_last_error(); return NULL; }
+    DWORD m = GetFullPathNameW(WPATH, (DWORD)(sizeof WFULL / sizeof WFULL[0]), WFULL, NULL);
+    if (m == 0 || m >= sizeof WFULL / sizeof WFULL[0]) { set_dlerr_from_last_error(); return NULL; }
+    HMODULE h = LoadLibraryExW(WFULL, NULL, LOAD_WITH_ALTERED_SEARCH_PATH);
+    if (!h) set_dlerr_from_last_error();
+    return (void *)h;
+}
+
+static void *host_dlsym(void *dl, const char *name) {
+    void *p = (void *)GetProcAddress((HMODULE)dl, name);
+    if (!p) set_dlerr_from_last_error();
+    return p;
+}
+
+static void host_dlclose(void *dl) { FreeLibrary((HMODULE)dl); }
+
+static const char *host_dlerror(void) { return DLERR; }
+
+#else
+
+static void *host_dlopen(const char *path) { return dlopen(path, RTLD_LOCAL | RTLD_NOW); }
+static void *host_dlsym(void *dl, const char *name) { return dlsym(dl, name); }
+static void host_dlclose(void *dl) { dlclose(dl); }
+static const char *host_dlerror(void) { return dlerror(); }
+
+#endif
+
+/* A .clap bundle is a shared object (a DLL renamed .clap on Windows); on
+ * macOS it is a directory bundle whose binary lives at
+ * Contents/MacOS/<name>. Resolve both shapes. */
 static void *open_bundle(const char *path) {
-    void *dl = dlopen(path, RTLD_LOCAL | RTLD_NOW);
+    void *dl = host_dlopen(path);
     if (dl) return dl;
 #ifdef __APPLE__
     char inner[1024];
@@ -181,7 +238,7 @@ static void *open_bundle(const char *path) {
     char *dot = strrchr(stem, '.');
     if (dot) *dot = '\0';
     snprintf(inner, sizeof inner, "%s/Contents/MacOS/%s", path, stem);
-    dl = dlopen(inner, RTLD_LOCAL | RTLD_NOW);
+    dl = host_dlopen(inner);
     if (dl) return dl;
 #endif
     return NULL;
@@ -190,7 +247,7 @@ static void *open_bundle(const char *path) {
 static void unload(void) {
     if (S.entry_inited && S.entry && S.entry->deinit) S.entry->deinit();
     S.entry_inited = 0;
-    if (S.dl) dlclose(S.dl);
+    if (S.dl) host_dlclose(S.dl);
     S.dl = NULL;
     S.entry = NULL;
     S.factory = NULL;
@@ -203,9 +260,9 @@ long clap_host_scan(const char *path) {
     if (!path || !path[0]) { set_err("no plugin path given"); return -1; }
 
     S.dl = open_bundle(path);
-    if (!S.dl) { set_err("dlopen %s: %s", path, dlerror()); return -1; }
+    if (!S.dl) { set_err("dlopen %s: %s", path, host_dlerror()); return -1; }
 
-    const clap_plugin_entry_t *e = (const clap_plugin_entry_t *)dlsym(S.dl, "clap_entry");
+    const clap_plugin_entry_t *e = (const clap_plugin_entry_t *)host_dlsym(S.dl, "clap_entry");
     if (!e) {
         set_err("%s has no clap_entry symbol -- not a CLAP plugin", path);
         unload();
