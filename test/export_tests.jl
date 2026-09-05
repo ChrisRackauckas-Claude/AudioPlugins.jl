@@ -255,6 +255,55 @@ end
         @test process(x, (3, 2.0)) == x .* 2
     end
 
+    # A held sample-and-hold: y[i] = gain * x[k] for the latest k <= i with k % d == 0.
+    function decimate_hold(x, d, gain)
+        y = similar(x)
+        held = 0.0
+        for (i, v) in enumerate(x)
+            (i - 1) % d == 0 && (held = gain * v)
+            y[i] = held
+        end
+        return y
+    end
+
+    decim_spec = read_plugin_spec(joinpath(FIX, "fx_decim.toml"))
+    decim = export_plugin(decim_spec, joinpath(dir, "fx_decim.clap"))
+
+    @testset "a sub-clock output is held between ticks, sample-exactly" begin
+        @test decim_spec.sub_clock
+        w = read(only(AP.emit_wrapper(CLAP(), decim_spec, mktempdir()).sources), String)
+        @test occursin("if (o.has_y) s->held[c] = o.y;", w)
+        # The phase lives in the instance, so each run starts from a fresh one.
+        fresh() = clap_open!(decim; plugin_id = decim_spec.id, sample_rate = 48000, block_size = 64)
+        x = signal(64)
+        fresh()
+        @test process(x) == decimate_hold(x, 2, 1.0)
+        fresh()
+        @test process(x, (0, 0.5), (1, 3.0)) == decimate_hold(x, 3, 0.5)
+        fresh()
+        @test process(x, (0, 0.5), (1, 1.0)) == x .* 0.5      # divisor 1: every sample present
+        fresh()
+        @test !any(isnan, process(x, (0, 1.0), (1, 8.0)))   # NaN never leaks through the hold
+    end
+
+    @testset "the sub-clock phase carries across blocks" begin
+        x = signal(96)
+        clap_open!(decim; plugin_id = decim_spec.id, sample_rate = 48000, block_size = 32)
+        split = vcat((process(x[(32b + 1):(32b + 32)], (0, 1.0), (1, 5.0)) for b in 0:2)...)
+        clap_open!(decim; plugin_id = decim_spec.id, sample_rate = 48000, block_size = 96)
+        whole = process(x, (0, 1.0), (1, 5.0))
+        @test split == whole == decimate_hold(x, 5, 1.0)
+        # 32 is not a multiple of 5, so a plugin that restarted its phase at
+        # each block would tick at the block boundary and differ.
+        clap_open!(decim; plugin_id = decim_spec.id, sample_rate = 48000, block_size = 32)
+        restarted = Float64[]
+        for b in 0:2
+            clap_open!(decim; plugin_id = decim_spec.id, sample_rate = 48000, block_size = 32)
+            append!(restarted, process(x[(32b + 1):(32b + 32)], (0, 1.0), (1, 5.0)))
+        end
+        @test restarted != whole
+    end
+
     clap_close!()
 
     # ----------------------------------------------------------------------
@@ -389,6 +438,19 @@ end
                 @test export_plugin(spec, out) == out
                 @test isdir(joinpath(layout.dir, "lib", "julia"))
             end
+        end
+
+        @testset "a juliac sub-clock output is held between ticks" begin
+            jl_decim_spec = read_plugin_spec(joinpath(FIX, "jl_decim.toml"))
+            h = AP.julia_step_header(jl_decim_spec)
+            @test occursin("double y;\n    bool has_y;", h.header)
+            @test_throws ArgumentError AP.julia_step_header(PluginSpec(;
+                id = jl_gain_spec.id, name = jl_gain_spec.name, base = jl_gain_spec.base,
+                step = jl_gain_spec.step, inputs = jl_gain_spec.inputs, sub_clock = true))
+            jl_decim = export_plugin(jl_decim_spec, joinpath(dir, "jl_decim.clap"))
+            x = signal(96)
+            @test probe_run(jl_decim, x, 96; params = ((0, 0.5), (1, 3.0))).y == decimate_hold(x, 3, 0.5)
+            @test probe_run(jl_decim, x, 32; params = ((0, 1.0), (1, 5.0))).y == decimate_hold(x, 5, 1.0)
         end
     end
 end

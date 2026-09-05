@@ -1,0 +1,38 @@
+schema = 1
+
+[plugin]
+id = "org.sciml.audioplugins.fixture.decim"
+name = "Fixture Decimator"
+vendor = "AudioPlugins.jl"
+version = "0.1.0"
+description = "sample-and-hold of every divisor-th sample: an output on a sub-clock"
+channels = 2
+
+[abi]
+base = "fx_decim"
+pars = "FxDecimPars"
+inputs = [{ name = "u", role = "audio" }]
+output = "y"
+sub_clock = true
+
+[build]
+source = "fx_decim.c"
+header = "fx_decim.h"
+
+[[param]]
+id = 0
+name = "Gain"
+field = "gain"
+min = 0.0
+max = 4.0
+default = 1.0
+
+[[param]]
+id = 1
+name = "Divisor"
+field = "divisor"
+min = 1.0
+max = 8.0
+default = 2.0
+stepped = true
+ctype = "int64_t"
