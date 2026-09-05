@@ -204,6 +204,98 @@ static bool ports_get(const clap_plugin_t *p, uint32_t index, bool is_input,
 static const clap_plugin_audio_ports_t PORTS_EXT = { .count = ports_count, .get = ports_get };
 
 /* ---------------------------------------------------------------- *
+ * clap.state -- the parameter values, so a session reloads where it
+ * left off. Little-endian on the wire whatever the machine, so a
+ * project saved on one platform loads on another:
+ *
+ *   "APST" | u32 version | u32 count | count x (u32 id, f64 value)
+ * ---------------------------------------------------------------- */
+
+#define AP_STATE_VERSION 1u
+
+static bool write_all(const clap_ostream_t *os, const void *buf, size_t n) {
+    const char *p = buf;
+    while (n > 0) {
+        int64_t w = os->write(os, p, n);
+        if (w <= 0) return false;
+        p += w;
+        n -= (size_t)w;
+    }
+    return true;
+}
+
+static bool read_all(const clap_istream_t *is, void *buf, size_t n) {
+    char *p = buf;
+    while (n > 0) {
+        int64_t r = is->read(is, p, n);
+        if (r <= 0) return false;
+        p += r;
+        n -= (size_t)r;
+    }
+    return true;
+}
+
+static bool write_u32(const clap_ostream_t *os, uint32_t v) {
+    unsigned char b[4];
+    for (int i = 0; i < 4; i++) b[i] = (unsigned char)(v >> (8 * i));
+    return write_all(os, b, sizeof b);
+}
+
+static bool write_f64(const clap_ostream_t *os, double v) {
+    uint64_t u;
+    unsigned char b[8];
+    memcpy(&u, &v, sizeof u);
+    for (int i = 0; i < 8; i++) b[i] = (unsigned char)(u >> (8 * i));
+    return write_all(os, b, sizeof b);
+}
+
+static bool read_u32(const clap_istream_t *is, uint32_t *v) {
+    unsigned char b[4];
+    if (!read_all(is, b, sizeof b)) return false;
+    *v = 0;
+    for (int i = 0; i < 4; i++) *v |= (uint32_t)b[i] << (8 * i);
+    return true;
+}
+
+static bool read_f64(const clap_istream_t *is, double *v) {
+    unsigned char b[8];
+    uint64_t u = 0;
+    if (!read_all(is, b, sizeof b)) return false;
+    for (int i = 0; i < 8; i++) u |= (uint64_t)b[i] << (8 * i);
+    memcpy(v, &u, sizeof u);
+    return true;
+}
+
+static bool state_save(const clap_plugin_t *p, const clap_ostream_t *os) {
+    const inst_t *s = p->plugin_data;
+    if (!write_all(os, "APST", 4) || !write_u32(os, AP_STATE_VERSION) ||
+        !write_u32(os, (uint32_t)AP_N_PARAMS))
+        return false;
+    for (int i = 0; i < AP_N_PARAMS; i++)
+        if (!write_u32(os, PARAM_INFO[i].id) || !write_f64(os, s->values[i])) return false;
+    return true;
+}
+
+static bool state_load(const clap_plugin_t *p, const clap_istream_t *is) {
+    inst_t *s = p->plugin_data;
+    char magic[4];
+    uint32_t version, count;
+    if (!read_all(is, magic, sizeof magic) || memcmp(magic, "APST", 4) != 0) return false;
+    if (!read_u32(is, &version) || version != AP_STATE_VERSION) return false;
+    if (!read_u32(is, &count)) return false;
+    for (uint32_t k = 0; k < count; k++) {
+        uint32_t id;
+        double v;
+        if (!read_u32(is, &id) || !read_f64(is, &v)) return false;
+        int i = param_index(id);
+        if (i >= 0) set_param(s, i, v);     /* an id this build lacks is skipped */
+    }
+    return true;
+}
+
+static const clap_plugin_state_t STATE_EXT = { .save = state_save, .load = state_load };
+
+/* ---------------------------------------------------------------- *
  * Plugin lifecycle
  * ---------------------------------------------------------------- */
 
@@ -277,6 +369,7 @@ static const void *plug_get_extension(const clap_plugin_t *p, const char *id) {
     (void)p;
     if (strcmp(id, CLAP_EXT_AUDIO_PORTS) == 0) return &PORTS_EXT;
     if (strcmp(id, CLAP_EXT_PARAMS) == 0) return &PARAMS_EXT;
+    if (strcmp(id, CLAP_EXT_STATE) == 0) return &STATE_EXT;
     return NULL;
 }
 
