@@ -198,10 +198,14 @@ initialises a Julia runtime when the host loads it. Consequences:
   for a library, and an isbits step allocates nothing, but the garbage collector still exists
   in the audio callback. A C step has no such caveat.
 
+The wrapper also implements `clap.state`, so a DAW session reloads with the parameter
+values it was saved with: a small little-endian blob of `(id, value)` pairs, checked by
+`test/export/probe_state.c`, a minimal host that saves, loads into a fresh instance, and
+offers garbage.
+
 Not yet: the output must be on the base clock — the descriptor has no way to name a
-`has_<name>` presence flag, so a sub-clock output cannot be exported; there is no
-`clap.state` extension, so a DAW session will not persist parameter values across reload;
-Windows bundles are built but not exercised in CI; Julia-step bundling is tested on Linux only.
+`has_<name>` presence flag, so a sub-clock output cannot be exported; Windows bundles are
+built but not exercised in CI; Julia-step bundling is tested on Linux only.
 
 ## LV2 discovery is missing, and why
 
