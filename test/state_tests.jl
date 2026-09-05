@@ -20,7 +20,7 @@ const FIX_STATE = joinpath(@__DIR__, "export")
     end
     function round_trip(bundle, id, value)
         out = read(`$probe $bundle $id $value`, String)
-        pairs = (split(l, ' '; limit = 2) for l in split(out, '\n'; keepempty = false))
+        pairs = (split(l, ' '; limit = 2) for l in split(out, r"\r?\n"; keepempty = false))
         return Dict(String(k) => String(v) for (k, v) in pairs)
     end
 

@@ -151,7 +151,7 @@ end
         end
         input = join((repr(Float64(v)) for v in x), "\n") * "\n"
         out = read(pipeline(`$probe $args`; stdin = IOBuffer(input)), String)
-        lines = split(out, '\n'; keepempty = false)
+        lines = split(out, r"\r?\n"; keepempty = false)      # Windows stdout is CRLF
         meta = String[l for l in lines if startswith(l, "#")]
         y = [parse(Float64, l) for l in lines if !startswith(l, "#")]
         return (; meta, y)
