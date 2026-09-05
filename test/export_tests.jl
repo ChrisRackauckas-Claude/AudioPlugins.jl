@@ -346,10 +346,10 @@ end
         @test_throws ArgumentError AP.julia_step_header(gain_spec)
     end
 
-    juliac_ready = VERSION >= v"1.12" && isdefined(JuliaC, :ImageRecipe)
+    juliac_ready = VERSION >= v"1.12" && isdefined(JuliaC, :ImageRecipe) && !Sys.iswindows()
 
     if !juliac_ready
-        @testset "a Julia step needs Julia >= 1.12" begin
+        @testset "a Julia step needs Julia >= 1.12 on Linux or macOS" begin
             @test_throws ErrorException export_plugin(jl_gain_spec, joinpath(dir, "jl_gain.clap"))
         end
     else

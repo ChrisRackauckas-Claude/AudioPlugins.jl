@@ -170,8 +170,9 @@ What the exporter needs and does not need:
 
 - **A C compiler** (`cc`, `gcc` or `clang` on `PATH`, or `compiler = ...`), for authoring only.
   Hosting stays toolchain-free.
-- **For Julia steps, `using JuliaC` and Julia ≥ 1.12.** JuliaC is a weak dependency; the
-  `AudioPluginsJuliaCExt` extension does the build.
+- **For Julia steps, `using JuliaC` and Julia ≥ 1.12, on Linux or macOS.** JuliaC is a weak
+  dependency; the `AudioPluginsJuliaCExt` extension does the build. Windows has no rpath, so
+  a plugin could not find its runtime; a Julia step is refused there until that is solved.
 - **Link flags from the `.pc` file**, not a hardcoded `-lm`: that is how libraries the
   generated C calls into reach the link line, and an undefined symbol fails the link rather
   than the first `dlopen`.
@@ -208,8 +209,7 @@ output struct then also carries a `bool has_<output>` presence flag, and on samp
 is false the wrapper holds the last present value per channel. The phase lives in the step's
 own state, so it carries across blocks like everything else.
 
-Not yet: Windows bundles are built but not exercised in CI; Julia-step bundling is tested on
-Linux only.
+Not yet: Julia steps on Windows (above); Julia-step bundling is tested on Linux only.
 
 ## LV2 discovery is missing, and why
 
