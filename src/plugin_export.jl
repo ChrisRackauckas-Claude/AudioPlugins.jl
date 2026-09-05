@@ -1,19 +1,21 @@
-# Authoring plugins: wrap a per-sample C step function in a plugin format
+# Authoring plugins: wrap a per-sample step function in a plugin format
 # and build the bundle. The inverse of clap_io.jl, which hosts one.
 #
-# The interface is deliberately "a C step function plus a descriptor" and
+# The interface is deliberately "a step function plus a descriptor" and
 # names no code generator: anything that can emit
 #
 #     <base>_out <base>_step(<inputs...>, <Pars> *pars, <base>_mem *self);
 #     void       <base>_reset(<base>_mem *self);
 #
-# can be built into a plugin, and the test suite proves the seam with a
-# hand-written fixture and no code generator in the loop.
+# can be built into a plugin. The step comes either as C source with a
+# header (`CStep`) or as Julia `@ccallable` functions compiled to a trimmed
+# library by juliac (`JuliaStep`), and the test suite proves the seam with
+# hand-written fixtures of both kinds and no code generator in the loop.
 
 using TOML
 
-export PluginFormat, CLAP, PluginParam, StepInput, PluginSpec, read_plugin_spec,
-       export_plugin, register_plugin_format!, plugin_format
+export PluginFormat, CLAP, PluginParam, StepInput, StepSource, CStep, JuliaStep, PluginSpec,
+       read_plugin_spec, export_plugin, register_plugin_format!, plugin_format
 
 # ---------------------------------------------------------------------------
 # Formats
@@ -30,8 +32,10 @@ format implements
   * `emit_wrapper(fmt, spec, dir) -> (; sources, include_dirs)`, writing the
     format's wrapper C sources into `dir` — they are compiled with
     `-Wall -Wextra -Werror`;
-  * `link_bundle(fmt, spec, out, objects, libs; compiler)`, linking the
-    compiled objects into the bundle at `out`.
+  * `place_library(fmt, spec, library, out)`, moving one linked shared
+    library into the bundle layout at `out`;
+  * `runtime_layout(fmt, out) -> (; dir, rpath)`, where a bundled Julia
+    runtime goes for the bundle at `out` and the rpath that finds it.
 
 [`CLAP`](@ref) is the format that ships here. Formats whose SDKs cannot be
 vendored in a public repository live out of tree, subtype this, and
@@ -137,16 +141,104 @@ struct StepInput
 end
 
 """
-    PluginSpec(; id, name, base, pars, source, header, kwargs...)
+    StepSource
 
-Everything [`export_plugin`](@ref) needs, and nothing about where the C
-came from. Required:
+Where a plugin's step function comes from: [`CStep`](@ref) for C source
+with a header, [`JuliaStep`](@ref) for Julia `@ccallable`s compiled by
+juliac.
+"""
+abstract type StepSource end
+
+"""
+    CStep(; source, header, pkgconfig = nothing, include_dirs = String[])
+
+A step function written in C: `source` defines `<base>_step` and
+`<base>_reset`, `header` declares them along with the parameter, state
+and output structs. `pkgconfig` is the `.pc` file describing how to
+compile and link `source`; its `Cflags` and `Libs` go on the command
+lines, so libraries the C calls into reach the link line without being
+hardcoded. `include_dirs` are extra include directories.
+"""
+struct CStep <: StepSource
+    source::String
+    header::String
+    pkgconfig::Union{Nothing, String}
+    include_dirs::Vector{String}
+    function CStep(; source, header, pkgconfig = nothing, include_dirs = String[])
+        for (label, path) in (("source", source), ("header", header), ("pkgconfig", pkgconfig))
+            path === nothing && continue
+            isfile(path) || throw(ArgumentError("$label $(repr(path)) is not a file"))
+        end
+        return new(abspath(source), abspath(header),
+                   pkgconfig === nothing ? nothing : abspath(pkgconfig),
+                   String[abspath(d) for d in include_dirs])
+    end
+end
+
+"""
+    JuliaStep(; file, project = "", trim = "safe", bundle = false)
+
+A step function written in Julia and compiled to a trimmed library by
+juliac. `file` defines `<base>_step` and `<base>_reset` as
+`Base.@ccallable` functions over isbits structs:
+
+```julia
+struct GainPars; gain::Float64; bypass::Bool; end
+struct GainMem; ticks::Int64; end
+struct GainOut; y::Float64; end
+
+Base.@ccallable function my_gain_step(u::Float64, pars::Ptr{GainPars}, self::Ptr{GainMem})::GainOut
+    p = unsafe_load(pars)
+    return GainOut(p.bypass ? u : p.gain * u)
+end
+Base.@ccallable function my_gain_reset(self::Ptr{GainMem})::Cvoid
+    unsafe_store!(self, GainMem(0))
+    return nothing
+end
+```
+
+The parameter, state and output structs are read off the `@ccallable`
+signature and declared to C by a generated header, so the descriptor
+needs no `pars` name for a Julia step. `project` is the environment the
+file is compiled in (the active one by default) and `trim` the juliac
+trim mode.
+
+Building needs `using JuliaC` and Julia ≥ 1.12. The plugin links against
+`libjulia` at the building Julia's absolute path; with `bundle = true`
+the runtime is copied next to the plugin and found by a relative rpath,
+which is what makes the bundle relocatable. Either way the plugin brings
+a Julia runtime with it, which has consequences the README spells out.
+"""
+struct JuliaStep <: StepSource
+    file::String
+    project::String
+    trim::String
+    bundle::Bool
+    function JuliaStep(; file, project = "", trim = "safe", bundle::Bool = false)
+        isfile(file) || throw(ArgumentError("file $(repr(file)) is not a file"))
+        project == "" || isdir(project) || isfile(project) ||
+            throw(ArgumentError("project $(repr(project)) does not exist"))
+        trim in ("safe", "unsafe", "unsafe-warn", "no") ||
+            throw(ArgumentError("trim must be safe, unsafe, unsafe-warn or no, got $(repr(trim))"))
+        return new(abspath(file), project == "" ? "" : abspath(project), String(trim), bundle)
+    end
+end
+
+"""
+    PluginSpec(; id, name, base, step, kwargs...)
+
+Everything [`export_plugin`](@ref) needs, and nothing about where the
+step function came from. Required:
 
   * `id`, `name` — the plugin's identifier (reverse-DNS by convention) and display name;
   * `base` — the ABI base name: the step function is `<base>_step`, its
     state `<base>_mem`, its result `<base>_out`, and `<base>_reset` clears the state;
-  * `pars` — the name of the parameter struct type declared in `header`;
-  * `source`, `header` — the C file defining the ABI and the header declaring it.
+  * `step` — a [`CStep`](@ref) or [`JuliaStep`](@ref). As a shorthand for
+    a C step, `source`, `header`, `pkgconfig` and `include_dirs` may be
+    given directly;
+  * `pars` — the name of the parameter struct type declared in the C
+    header. Required for a `CStep`; derived from the `@ccallable` signature
+    for a `JuliaStep`.
 
 Optional:
 
@@ -161,11 +253,7 @@ Optional:
     host's sample rate into on activate, so one bundle serves every rate;
   * `params` — [`PluginParam`](@ref)s;
   * `constants` — `field => value` pairs written into the parameter struct
-    once at instantiation, for fields that are not plugin parameters;
-  * `pkgconfig` — the `.pc` file describing how to compile and link
-    `source`; its `Cflags` and `Libs` go on the command lines. Use it
-    rather than hardcoding `-lm`;
-  * `include_dirs` — extra include directories.
+    once at instantiation, for fields that are not plugin parameters.
 
 [`read_plugin_spec`](@ref) builds one from a TOML file.
 """
@@ -185,26 +273,36 @@ struct PluginSpec
     sample_rate_field::Union{Nothing, String}
     params::Vector{PluginParam}
     constants::Vector{Pair{String, Any}}
-    source::String
-    header::String
-    pkgconfig::Union{Nothing, String}
-    include_dirs::Vector{String}
+    step::StepSource
 end
 
-function PluginSpec(; id, name, base, pars, source, header,
+function PluginSpec(; id, name, base, step = nothing, pars = "",
+                    source = nothing, header = nothing, pkgconfig = nothing,
+                    include_dirs = String[],
                     vendor = "", version = "0.0.0", description = "", url = "",
                     features = ["audio-effect"], channels::Integer = 2,
                     inputs = [StepInput("u", :audio)], output = "y",
                     sample_rate_field = nothing, params = PluginParam[],
-                    constants = Pair{String, Any}[], pkgconfig = nothing,
-                    include_dirs = String[])
+                    constants = Pair{String, Any}[])
     isempty(id) && throw(ArgumentError("plugin id must not be empty"))
     isempty(name) && throw(ArgumentError("plugin name must not be empty"))
     1 <= channels <= 64 || throw(ArgumentError("channels must be in 1..64, got $channels"))
     _check_c_ident(base, "ABI base name")
-    _check_c_ident(pars, "parameter struct name")
     _check_c_ident(output, "output field")
     sample_rate_field === nothing || _check_c_ident(sample_rate_field, "sample_rate_field")
+    if step === nothing
+        (source === nothing || header === nothing) &&
+            throw(ArgumentError("give a `step` (CStep or JuliaStep), or `source` and `header` for a C step"))
+        step = CStep(; source, header, pkgconfig, include_dirs)
+    elseif source !== nothing || header !== nothing
+        throw(ArgumentError("give either `step` or `source`/`header`, not both"))
+    end
+    if step isa CStep
+        isempty(pars) && throw(ArgumentError("a C step needs `pars`, the parameter struct's name"))
+        _check_c_ident(pars, "parameter struct name")
+    elseif !isempty(pars)
+        _check_c_ident(pars, "parameter struct name")
+    end
     inputs = StepInput[i isa StepInput ? i : StepInput(i...) for i in inputs]
     count(i -> i.role === :audio, inputs) == 1 ||
         throw(ArgumentError("the step function must take exactly one :audio input"))
@@ -217,18 +315,18 @@ function PluginSpec(; id, name, base, pars, source, header,
         v isa Union{Bool, Integer, AbstractFloat} ||
             throw(ArgumentError("constant $k must be a Bool, Integer or Float, got $(typeof(v))"))
     end
-    for (label, path) in (("source", source), ("header", header), ("pkgconfig", pkgconfig))
-        path === nothing && continue
-        isfile(path) || throw(ArgumentError("$label $(repr(path)) is not a file"))
-    end
     return PluginSpec(String(id), String(name), String(vendor), String(version),
                       String(description), String(url), String[features...], Int(channels),
                       String(base), String(pars), inputs, String(output),
                       sample_rate_field === nothing ? nothing : String(sample_rate_field),
-                      params, consts, abspath(source), abspath(header),
-                      pkgconfig === nothing ? nothing : abspath(pkgconfig),
-                      String[abspath(d) for d in include_dirs])
+                      params, consts, step)
 end
+
+"The same spec with the parameter struct named `pars`."
+_with_pars(s::PluginSpec, pars::AbstractString) =
+    PluginSpec(s.id, s.name, s.vendor, s.version, s.description, s.url, s.features, s.channels,
+               s.base, String(pars), s.inputs, s.output, s.sample_rate_field, s.params,
+               s.constants, s.step)
 
 function _check_c_ident(s, what)
     occursin(r"^[A-Za-z_][A-Za-z0-9_]*$", s) ||
@@ -255,16 +353,22 @@ channels = 2                  # optional
 
 [abi]
 base = "ex_gain"              # ex_gain_step, ex_gain_reset, ex_gain_mem, ex_gain_out
-pars = "ExGainPars"           # the parameter struct declared in the header
+pars = "ExGainPars"           # the parameter struct declared in the C header (C step only)
 inputs = [{ name = "u", role = "audio" }, { name = "clock", role = "clock" }]
 output = "y"                  # field of ex_gain_out; optional, default "y"
 sample_rate_field = "fs"      # optional
 
-[build]
+[build]                       # a C step ...
 source = "ex_gain.c"
 header = "ex_gain.h"
 pkgconfig = "ex_gain.pc"      # optional
 include_dirs = []             # optional
+
+[build]                       # ... or a Julia step (one or the other)
+julia = "ex_gain.jl"
+project = "."                 # optional: environment to compile in
+trim = "safe"                 # optional: juliac trim mode
+bundle = false                # optional: copy the Julia runtime next to the plugin
 
 [[param]]
 id = 0
@@ -299,20 +403,30 @@ function read_plugin_spec(path::AbstractString)
                           stepped = get(p, "stepped", false),
                           ctype = get(p, "ctype", "double"))
               for p in get(d, "param", Any[])]
+    step = if haskey(build, "julia")
+        haskey(build, "source") &&
+            throw(ArgumentError("$path: [build] names both `julia` and `source`"))
+        JuliaStep(; file = resolve(build["julia"]),
+                  project = something(resolve(get(build, "project", nothing)), ""),
+                  trim = get(build, "trim", "safe"), bundle = get(build, "bundle", false))
+    else
+        haskey(build, "source") && haskey(build, "header") ||
+            throw(ArgumentError("$path: [build] needs `source` and `header`, or `julia`"))
+        CStep(; source = resolve(build["source"]), header = resolve(build["header"]),
+              pkgconfig = resolve(get(build, "pkgconfig", nothing)),
+              include_dirs = [resolve(i) for i in get(build, "include_dirs", String[])])
+    end
     return PluginSpec(;
         id = plugin["id"], name = plugin["name"],
         vendor = get(plugin, "vendor", ""), version = get(plugin, "version", "0.0.0"),
         description = get(plugin, "description", ""), url = get(plugin, "url", ""),
         features = get(plugin, "features", ["audio-effect"]),
         channels = get(plugin, "channels", 2),
-        base = abi["base"], pars = abi["pars"],
+        base = abi["base"], pars = get(abi, "pars", ""), step,
         inputs = isempty(inputs) ? [StepInput("u", :audio)] : inputs,
         output = get(abi, "output", "y"),
         sample_rate_field = get(abi, "sample_rate_field", nothing),
-        params, constants = collect(get(d, "constants", Dict{String, Any}())),
-        source = resolve(build["source"]), header = resolve(build["header"]),
-        pkgconfig = resolve(get(build, "pkgconfig", nothing)),
-        include_dirs = [resolve(i) for i in get(build, "include_dirs", String[])])
+        params, constants = collect(get(d, "constants", Dict{String, Any}())))
 end
 
 function _section(d, key, path)
@@ -355,7 +469,194 @@ end
 _expand_pc(s, vars) = replace(s, r"\$\{([A-Za-z0-9_.]+)\}" => m -> get(vars, m[3:(end - 1)], ""))
 
 # ---------------------------------------------------------------------------
-# Rendering C
+# A Julia step's C view: the header juliac does not write
+# ---------------------------------------------------------------------------
+
+const C_SCALARS = Dict{DataType, String}(
+    Float64 => "double", Float32 => "float", Bool => "bool",
+    Int8 => "int8_t", Int16 => "int16_t", Int32 => "int32_t", Int64 => "int64_t",
+    UInt8 => "uint8_t", UInt16 => "uint16_t", UInt32 => "uint32_t", UInt64 => "uint64_t")
+
+"""
+    julia_step_header(spec::PluginSpec) -> (; pars::String, header::String)
+
+Load `spec.step.file` into a private module (once per file), read the parameter, state
+and output struct types off the `@ccallable` signatures of `<base>_step`
+and `<base>_reset`, check them against the descriptor, and write the C
+header declaring the same ABI. Julia lays out isbits structs the way C
+does, and the header carries `_Static_assert`s of every size and field
+offset so that a mismatch is a compile error rather than a wrong plugin.
+
+Supported field types: the C scalars (`Float64`, `Float32`, `Bool`, the
+sized integers), `Ptr`, `NTuple{N, T}` of those, and nested non-parametric
+isbits structs.
+"""
+function julia_step_header(spec::PluginSpec)
+    step = spec.step
+    step isa JuliaStep || throw(ArgumentError("julia_step_header: the step is not a JuliaStep"))
+    mod = _step_module(step.file)
+    stepname, resetname = spec.base * "_step", spec.base * "_reset"
+    rt, params = _ccallable_signature(mod, stepname, step.file)
+    n = length(spec.inputs)
+    length(params) == n + 2 ||
+        throw(ArgumentError("$stepname must take the $n descriptor input(s), a Ptr to the parameter " *
+                            "struct and a Ptr to the state struct; its @ccallable signature has " *
+                            "$(length(params)) arguments"))
+    for (inp, T) in zip(spec.inputs, params)
+        want = inp.role === :audio ? Float64 : Bool
+        T === want || throw(ArgumentError("$stepname: input $(inp.name) must be $want, got $T"))
+    end
+    P = _pointee(params[n + 1], "$stepname: the parameter argument")
+    M = _pointee(params[n + 2], "$stepname: the state argument")
+    O = rt
+    for (T, what) in ((P, "parameter"), (M, "state"), (O, "output"))
+        _plain_struct(T) ||
+            throw(ArgumentError("$stepname: the $what struct must be a non-parametric isbits struct, got $T"))
+    end
+    hasfield(O, Symbol(spec.output)) ||
+        throw(ArgumentError("$stepname: output struct $O has no field $(spec.output)"))
+    rrt, rparams = _ccallable_signature(mod, resetname, step.file)
+    (rrt === Nothing || rrt === Cvoid) && rparams == [Ptr{M}] ||
+        throw(ArgumentError("$resetname must be declared as ($resetname(self::Ptr{$M})::Cvoid), " *
+                            "got return $rrt over $(Tuple(rparams))"))
+    isempty(spec.pars) || spec.pars == String(nameof(P)) ||
+        throw(ArgumentError("the descriptor names the parameter struct $(spec.pars) but $stepname takes Ptr{$P}"))
+    for p in spec.params
+        _check_struct_field(P, p.field, p.ctype, "parameter $(repr(p.name))")
+    end
+    for (k, _) in spec.constants
+        hasfield(P, Symbol(k)) || throw(ArgumentError("constant $k: $P has no field $k"))
+    end
+    spec.sample_rate_field === nothing ||
+        _check_struct_field(P, spec.sample_rate_field, "double", "sample_rate_field")
+    return (; pars = String(nameof(P)), header = _c_header(spec, step.file, P, M, O))
+end
+
+# One module per (file, mtime): before Julia 1.12 a @ccallable name can be
+# defined only once per session, so a file must not be included twice.
+const STEP_MODULES = Dict{Tuple{String, Float64}, Module}()
+
+function _step_module(file::AbstractString)
+    return get!(STEP_MODULES, (file, mtime(file))) do
+        mod = Module(:AudioPluginsReflect)
+        try
+            Base.include(mod, file)
+        catch e
+            if e isa LoadError && occursin("@ccallable was already defined", sprint(showerror, e.error))
+                throw(ArgumentError("$file changed since it was last loaded, and on Julia $VERSION " *
+                                    "a @ccallable name cannot be redefined: restart Julia to export it again"))
+            end
+            rethrow()
+        end
+        mod
+    end
+end
+
+function _ccallable_signature(mod::Module, name::AbstractString, file::AbstractString)
+    sym = Symbol(name)
+    isdefined(mod, sym) || throw(ArgumentError("$file does not define $name"))
+    f = getfield(mod, sym)
+    ms = methods(f)
+    length(ms) == 1 || throw(ArgumentError("$name must have exactly one method, found $(length(ms))"))
+    m = only(ms)
+    isdefined(m, :ccallable) || throw(ArgumentError("$name is not declared Base.@ccallable"))
+    rt, sig = m.ccallable[1], m.ccallable[2]
+    return rt, collect(sig.parameters[2:end])
+end
+
+function _pointee(T, what)
+    T isa DataType && T <: Ptr && T !== Ptr ||
+        throw(ArgumentError("$what must be a Ptr to a struct, got $T"))
+    return T.parameters[1]
+end
+
+_plain_struct(T) = T isa DataType && isstructtype(T) && isbitstype(T) && isempty(T.parameters) &&
+                   !(T <: Tuple)
+
+function _check_struct_field(P, field, ctype, what)
+    hasfield(P, Symbol(field)) || throw(ArgumentError("$what: $P has no field $field"))
+    got = get(C_SCALARS, fieldtype(P, Symbol(field)), nothing)
+    got == ctype ||
+        throw(ArgumentError("$what: field $field of $P is $(fieldtype(P, Symbol(field))), " *
+                            "which is not the descriptor's $ctype"))
+    return nothing
+end
+
+function _c_header(spec::PluginSpec, file, P, M, O)
+    guard = uppercase(spec.base) * "_H"
+    io = IOBuffer()
+    println(io, "/* $(spec.base).h -- generated by AudioPlugins from $(basename(file)):")
+    println(io, " * the C declaration of its @ccallable step. Do not edit. */")
+    println(io, "#ifndef $guard\n#define $guard\n")
+    println(io, "#include <stdbool.h>\n#include <stddef.h>\n#include <stdint.h>\n")
+    done = Set{DataType}()
+    for T in (P, M, O)
+        _emit_c_struct!(io, T, done)
+    end
+    M === O || println(io, "typedef $(nameof(M)) $(spec.base)_mem;")
+    println(io, "typedef $(nameof(O)) $(spec.base)_out;")
+    M === O && println(io, "typedef $(nameof(M)) $(spec.base)_mem;")
+    args = join((i.role === :audio ? "double $(i.name)" : "bool $(i.name)" for i in spec.inputs), ", ")
+    println(io, "\n$(nameof(O)) $(spec.base)_step($args, $(nameof(P)) *pars, $(nameof(M)) *self);")
+    println(io, "void $(spec.base)_reset($(nameof(M)) *self);\n")
+    println(io, "#endif")
+    return String(take!(io))
+end
+
+function _emit_c_struct!(io, T::DataType, done::Set{DataType})
+    T in done && return
+    # Nested structs first, so every field type is declared before use.
+    for i in 1:fieldcount(T)
+        F = fieldtype(T, i)
+        F <: Tuple && (F = _tuple_eltype(F, T, i))
+        _plain_struct(F) && _emit_c_struct!(io, F, done)
+    end
+    name = String(nameof(T))
+    println(io, "typedef struct $name $name;")
+    println(io, "struct $name {")
+    for i in 1:fieldcount(T)
+        println(io, "    ", _c_field(fieldtype(T, i), fieldname(T, i), T, i), ";")
+    end
+    println(io, "};")
+    println(io, "_Static_assert(sizeof($name) == $(sizeof(T)), \"$name: size differs from Julia\");")
+    for i in 1:fieldcount(T)
+        println(io, "_Static_assert(offsetof($name, $(fieldname(T, i))) == $(fieldoffset(T, i)), ",
+                "\"$name.$(fieldname(T, i)): offset differs from Julia\");")
+    end
+    println(io)
+    push!(done, T)
+    return
+end
+
+function _tuple_eltype(F, T, i)
+    fts = fieldtypes(F)
+    (!isempty(fts) && all(===(fts[1]), fts)) ||
+        throw(ArgumentError("field $(fieldname(T, i)) of $T: only homogeneous NTuple fields map to C arrays, got $F"))
+    return fts[1]
+end
+
+function _c_field(F, name, T, i)
+    if F <: Tuple
+        E = _tuple_eltype(F, T, i)
+        return "$(_c_type(E, T, i)) $name[$(fieldcount(F))]"
+    end
+    return "$(_c_type(F, T, i)) $name"
+end
+
+function _c_type(F, T, i)
+    haskey(C_SCALARS, F) && return C_SCALARS[F]
+    if F isa DataType && F <: Ptr
+        F === Ptr && throw(ArgumentError("field $(fieldname(T, i)) of $T: an untyped Ptr cannot be declared to C"))
+        E = F.parameters[1]
+        return E === Cvoid ? "void *" : _c_type(E, T, i) * " *"
+    end
+    _plain_struct(F) && return String(nameof(F))
+    throw(ArgumentError("field $(fieldname(T, i)) of $T has type $F, which has no C declaration " *
+                        "(use Float64, Float32, Bool, sized integers, Ptr, NTuple or nested isbits structs)"))
+end
+
+# ---------------------------------------------------------------------------
+# Rendering the wrapper
 # ---------------------------------------------------------------------------
 
 const CLAP_TEMPLATE = normpath(joinpath(@__DIR__, "..", "csrc", "clap_plugin_template.c"))
@@ -412,6 +713,7 @@ function _render_template(template::AbstractString, subs::Dict{String, String})
 end
 
 function _clap_substitutions(spec::PluginSpec)
+    isempty(spec.pars) && throw(ArgumentError("the parameter struct name is not known yet"))
     step_args = join(((i.role === :audio ? "x" : "true") for i in spec.inputs), ", ")
     port_type = spec.channels == 1 ? "CLAP_PORT_MONO" :
                 spec.channels == 2 ? "CLAP_PORT_STEREO" : "NULL"
@@ -424,7 +726,7 @@ function _clap_substitutions(spec::PluginSpec)
     on_activate = spec.sample_rate_field === nothing ? "(void)sr;" :
                   "s->pars.$(spec.sample_rate_field) = sr;"
     return Dict(
-        "HEADER" => basename(spec.header),
+        "HEADER" => spec.base * ".h",
         "BASE" => spec.base,
         "PARS" => spec.pars,
         "CHANNELS" => string(spec.channels),
@@ -450,9 +752,13 @@ end
     emit_wrapper(::CLAP, spec, dir) -> (; sources, include_dirs)
 
 Render `csrc/clap_plugin_template.c` for `spec` into `dir/clap_plugin.c`.
+The wrapper includes `<base>.h`, which for a C step is the descriptor's
+header and for a Julia step the generated one.
 """
 function emit_wrapper(::CLAP, spec::PluginSpec, dir::AbstractString)
-    src = _render_template(read(CLAP_TEMPLATE, String), _clap_substitutions(spec))
+    subs = _clap_substitutions(spec)
+    spec.step isa CStep && (subs["HEADER"] = basename(spec.step.header))
+    src = _render_template(read(CLAP_TEMPLATE, String), subs)
     path = joinpath(dir, "clap_plugin.c")
     write(path, src)
     return (; sources = [path], include_dirs = [VENDOR_DIR])
@@ -477,26 +783,39 @@ function _run(cmd::Cmd, verbose::Bool)
 end
 
 """
-    link_bundle(::CLAP, spec, out, objects, libs; compiler, verbose = false)
+    place_library(::CLAP, spec, library, out)
 
-Link `objects` into the CLAP bundle at `out`: a shared object on Linux and
-Windows, a `Contents/MacOS` directory bundle with an `Info.plist` on macOS.
+Move the linked shared library at `library` into the CLAP bundle at
+`out`: renamed in place on Linux and Windows, inside a `Contents/MacOS`
+directory bundle with an `Info.plist` on macOS.
 """
-function link_bundle(::CLAP, spec::PluginSpec, out::AbstractString, objects, libs;
-                     compiler, verbose::Bool = false)
+function place_library(::CLAP, spec::PluginSpec, library::AbstractString, out::AbstractString)
     if Sys.isapple()
         stem = first(splitext(basename(out)))
         macos = joinpath(out, "Contents", "MacOS")
         mkpath(macos)
         write(joinpath(out, "Contents", "Info.plist"), _info_plist(spec, stem))
         write(joinpath(out, "Contents", "PkgInfo"), "BNDL????")
-        binary = joinpath(macos, stem)
-        _run(`$compiler -shared -o $binary $objects $libs`, verbose)
+        mv(library, joinpath(macos, stem); force = true)
     else
         mkpath(dirname(out))
-        _run(`$compiler -shared -fPIC -o $out $objects $libs -Wl,--no-undefined`, verbose)
+        mv(library, out; force = true)
     end
     return out
+end
+
+"""
+    runtime_layout(::CLAP, out) -> (; dir, rpath)
+
+Where a bundled Julia runtime goes for the plugin at `out`, and the
+rpath, relative to the plugin binary, that finds it: `Name.clap.runtime/`
+beside a Linux or Windows `.clap`, `Contents/Resources/julia/` inside a
+macOS bundle. The runtime's libraries land under `<dir>/lib`.
+"""
+function runtime_layout(::CLAP, out::AbstractString)
+    Sys.isapple() && return (; dir = joinpath(out, "Contents", "Resources", "julia"),
+                             rpath = joinpath("..", "Resources", "julia", "lib"))
+    return (; dir = out * ".runtime", rpath = joinpath(basename(out) * ".runtime", "lib"))
 end
 
 function _info_plist(spec::PluginSpec, stem::AbstractString)
@@ -524,16 +843,23 @@ end
                   verbose = false) -> out
 
 Build the plugin described by `spec` into the bundle at `out`, whose
-extension must be the format's (`.clap`). The wrapper is rendered and
-compiled under `-Wall -Wextra -Werror`; `spec.source` is compiled without
-those, since generated C tends to carry harmless unused temporaries; both
-are built with hidden visibility so that two plugins sharing an ABI base
-name can coexist in one host process. Link flags come from the
-descriptor's `.pc` file; an undefined symbol fails the link rather than
-the first `dlopen`.
+extension must be the format's (`.clap`).
 
-This is the one operation in the package that needs a C compiler: `cc`,
-`gcc` or `clang` on `PATH`, or `compiler = "/path/to/cc"`.
+For a [`CStep`](@ref): the wrapper is rendered and compiled under
+`-Wall -Wextra -Werror`; the step's C is compiled without those, since
+generated C tends to carry harmless unused temporaries; both are built
+with hidden visibility so that two plugins sharing an ABI base name can
+coexist in one host process; link flags come from the descriptor's `.pc`
+file, and an undefined symbol fails the link rather than the first
+`dlopen`.
+
+For a [`JuliaStep`](@ref): the step's structs are read off its
+`@ccallable` signature and declared by a generated header, and juliac
+compiles the Julia file and the wrapper into one trimmed shared library.
+This needs `using JuliaC` and Julia ≥ 1.12.
+
+Both need a C compiler: `cc`, `gcc` or `clang` on `PATH`, or
+`compiler = "/path/to/cc"`. Hosting plugins does not.
 """
 function export_plugin(spec::PluginSpec, out::AbstractString; format::PluginFormat = CLAP(),
                        compiler = nothing, verbose::Bool = false)
@@ -541,15 +867,17 @@ function export_plugin(spec::PluginSpec, out::AbstractString; format::PluginForm
     endswith(out, ext) ||
         throw(ArgumentError("output $(repr(out)) must end in $ext for format $(format_name(format))"))
     out = abspath(out)
+    spec.step isa JuliaStep && return _export_julia_step(format, spec, out; compiler, verbose)
+    step = spec.step::CStep
     cc = _resolve_compiler(compiler)
-    pc = spec.pkgconfig === nothing ? (; cflags = String[], libs = String[]) :
-         pkgconfig_flags(spec.pkgconfig)
+    pc = step.pkgconfig === nothing ? (; cflags = String[], libs = String[]) :
+         pkgconfig_flags(step.pkgconfig)
     mktempdir() do dir
         wrapper = emit_wrapper(format, spec, dir)
         # -isystem rather than -I for the wrapper: the ABI header is someone
         # else's code and must not fail our -Werror build.
         incs = String[]
-        for d in [wrapper.include_dirs; dirname(spec.header); dirname(spec.source); spec.include_dirs]
+        for d in [wrapper.include_dirs; dirname(step.header); dirname(step.source); step.include_dirs]
             push!(incs, "-isystem", d)
         end
         objects = String[]
@@ -561,15 +889,30 @@ function export_plugin(spec::PluginSpec, out::AbstractString; format::PluginForm
             push!(objects, obj)
         end
         model = joinpath(dir, "model.o")
-        _run(`$cc $common -c $(spec.source) -o $model`, verbose)
+        _run(`$cc $common -c $(step.source) -o $model`, verbose)
         push!(objects, model)
-        link_bundle(format, spec, out, objects, pc.libs; compiler = cc, verbose)
+        library = joinpath(dir, "plugin." * Base.BinaryPlatforms.platform_dlext())
+        undefined = Sys.isapple() ? String[] : ["-Wl,--no-undefined"]
+        _run(`$cc -shared -fPIC -o $library $objects $(pc.libs) $undefined`, verbose)
+        place_library(format, spec, library, out)
     end
     return out
+end
+
+"""
+    _export_julia_step(format, spec, out; compiler, verbose)
+
+Implemented by the `AudioPluginsJuliaCExt` extension, which loads with
+`using JuliaC`.
+"""
+function _export_julia_step(format, spec, out; compiler, verbose)
+    error("export_plugin: building a plugin from a JuliaStep needs JuliaC loaded " *
+          "(`using JuliaC`) and Julia ≥ 1.12; this is Julia $VERSION")
 end
 
 register_plugin_format!(CLAP())
 
 @static if VERSION >= v"1.11"
-    eval(Meta.parse("public format_name, bundle_extension, emit_wrapper, link_bundle, pkgconfig_flags"))
+    eval(Meta.parse("public format_name, bundle_extension, emit_wrapper, place_library, " *
+                    "runtime_layout, pkgconfig_flags, julia_step_header"))
 end

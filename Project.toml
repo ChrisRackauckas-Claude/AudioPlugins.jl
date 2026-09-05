@@ -8,15 +8,23 @@ CLAPHost_jll = "c9c4f589-041a-5a1c-a149-a4cdc6e5211b"
 Scratch = "6c6a2e73-6563-6170-7368-637461726353"
 TOML = "fa267f1f-6049-4f14-aa54-33bafae1ed76"
 
+[weakdeps]
+JuliaC = "acedd4c2-ced6-4a15-accc-2607eb759ba2"
+
+[extensions]
+AudioPluginsJuliaCExt = "JuliaC"
+
 [compat]
 CLAPHost_jll = "1.0"
+JuliaC = "0.3"
 Scratch = "1"
 TOML = "1"
 julia = "1.10"
 
 [extras]
+JuliaC = "acedd4c2-ced6-4a15-accc-2607eb759ba2"
 Libdl = "8f399da3-3557-5675-b5ff-fb832c97cbdb"
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 
 [targets]
-test = ["Libdl", "Test"]
+test = ["JuliaC", "Libdl", "Test"]

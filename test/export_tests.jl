@@ -5,6 +5,7 @@
 
 using Test
 using AudioPlugins
+using JuliaC
 const AP = AudioPlugins
 
 const FIX = joinpath(@__DIR__, "export")
@@ -57,11 +58,11 @@ end
         @test gain_spec.features == ["audio-effect", "utility"]
         @test [p.id for p in gain_spec.params] == [0, 7]
         @test gain_spec.params[2].ctype == "bool" && gain_spec.params[2].stepped
-        @test gain_spec.pkgconfig === nothing
-        @test isabspath(gain_spec.source) && isfile(gain_spec.source)
+        @test gain_spec.step.pkgconfig === nothing
+        @test isabspath(gain_spec.step.source) && isfile(gain_spec.step.source)
         @test eq_spec.sample_rate_field == "fs"
         @test eq_spec.constants == ["enabled" => true]
-        @test endswith(eq_spec.pkgconfig, "fx_eq.pc")
+        @test endswith(eq_spec.step.pkgconfig, "fx_eq.pc")
         @test plugin_format("clap") === CLAP()
     end
 
@@ -74,7 +75,7 @@ end
         @test_throws ArgumentError p(ctype = "float")
         @test_throws ArgumentError StepInput("u", :midi)
         spec(; kw...) = PluginSpec(; id = "a", name = "b", base = "c", pars = "P",
-                                   source = gain_spec.source, header = gain_spec.header, kw...)
+                                   source = gain_spec.step.source, header = gain_spec.step.header, kw...)
         @test spec() isa PluginSpec
         @test_throws ArgumentError spec(inputs = [StepInput("c", :clock)])
         @test_throws ArgumentError spec(inputs = [StepInput("u", :audio), StepInput("v", :audio)])
@@ -217,8 +218,8 @@ end
         # macOS links libm through libSystem regardless, so only ELF can check.
         if Sys.islinux()
             nopc = PluginSpec(; id = eq_spec.id, name = eq_spec.name, base = eq_spec.base,
-                              pars = eq_spec.pars, source = eq_spec.source,
-                              header = eq_spec.header, inputs = eq_spec.inputs,
+                              pars = eq_spec.pars, source = eq_spec.step.source,
+                              header = eq_spec.step.header, inputs = eq_spec.inputs,
                               sample_rate_field = "fs", params = eq_spec.params,
                               constants = eq_spec.constants)
             @test_throws ProcessFailedException redirect_stderr(devnull) do
@@ -227,11 +228,22 @@ end
         end
     end
 
+    @testset "the step source is validated" begin
+        @test_throws ArgumentError CStep(; source = "/nonexistent.c", header = gain_spec.step.header)
+        @test_throws ArgumentError JuliaStep(; file = "/nonexistent.jl")
+        @test_throws ArgumentError JuliaStep(; file = joinpath(FIX, "jl_gain.jl"), trim = "maybe")
+        @test_throws ArgumentError PluginSpec(; id = "a", name = "b", base = "c", pars = "P",
+                                              step = gain_spec.step, source = gain_spec.step.source)
+        @test_throws ArgumentError PluginSpec(; id = "a", name = "b", base = "c",
+                                              step = gain_spec.step)      # a C step needs pars
+        @test_throws ArgumentError PluginSpec(; id = "a", name = "b", base = "c")
+    end
+
     @testset "a mono descriptor and a Julia-side spec, no TOML" begin
         mono = PluginSpec(; id = "org.sciml.audioplugins.fixture.mono", name = "Mono Gain",
                           base = "fx_gain", pars = "FxGainPars", channels = 1,
                           inputs = [("u", :audio), ("clock1", :clock)],
-                          source = gain_spec.source, header = gain_spec.header,
+                          source = gain_spec.step.source, header = gain_spec.step.header,
                           params = [PluginParam(; id = 3, name = "Gain", field = "gain",
                                                 min = 0, max = 2, default = 0.25)])
         b = export_plugin(mono, joinpath(dir, "mono.clap"))
@@ -244,4 +256,139 @@ end
     end
 
     clap_close!()
+
+    # ----------------------------------------------------------------------
+    # Julia steps: juliac-trimmed plugins, hosted from a C process
+    # ----------------------------------------------------------------------
+
+    jl_gain_spec = read_plugin_spec(joinpath(FIX, "jl_gain.toml"))
+    jl_eq_spec = read_plugin_spec(joinpath(FIX, "jl_eq.toml"))
+
+    @testset "a Julia step's header is generated from its @ccallable signature" begin
+        @test jl_gain_spec.step isa JuliaStep
+        @test jl_gain_spec.pars == ""
+        h = AP.julia_step_header(jl_gain_spec)
+        @test h.pars == "JlGainPars"
+        @test occursin("struct JlGainPars {\n    double gain;\n    bool bypass;\n};", h.header)
+        @test occursin("_Static_assert(sizeof(JlGainPars) == 16,", h.header)
+        @test occursin("_Static_assert(offsetof(JlGainPars, bypass) == 8,", h.header)
+        @test occursin("typedef JlGainMem jl_gain_mem;", h.header)
+        @test occursin("typedef JlGainOut jl_gain_out;", h.header)
+        @test occursin("JlGainOut jl_gain_step(double u, bool clock1, JlGainPars *pars, JlGainMem *self);",
+                       h.header)
+        @test occursin("void jl_gain_reset(JlGainMem *self);", h.header)
+        e = AP.julia_step_header(jl_eq_spec)
+        @test e.pars == "JlEqPars"
+        @test occursin("double x1;\n    double x2;\n    double y1;\n    double y2;", e.header)
+
+        # And it is checked against the descriptor.
+        respec(spec; kw...) = PluginSpec(; id = spec.id, name = spec.name, base = spec.base,
+                                         step = spec.step, inputs = spec.inputs,
+                                         params = spec.params, kw...)
+        @test_throws ArgumentError AP.julia_step_header(respec(jl_gain_spec; output = "z"))
+        @test_throws ArgumentError AP.julia_step_header(respec(jl_gain_spec; pars = "Other"))
+        @test_throws ArgumentError AP.julia_step_header(respec(jl_gain_spec; inputs = [StepInput("u", :audio)]))
+        @test_throws ArgumentError AP.julia_step_header(respec(jl_gain_spec; sample_rate_field = "fs"))
+        @test_throws ArgumentError AP.julia_step_header(respec(jl_gain_spec; constants = ["nope" => 1]))
+        @test_throws ArgumentError AP.julia_step_header(respec(jl_gain_spec;
+            params = [PluginParam(; id = 0, name = "G", field = "gain", min = 0, max = 1, default = 0,
+                                  ctype = "bool")]))
+        @test_throws ArgumentError AP.julia_step_header(respec(jl_gain_spec; base = "fx_gain"))
+        @test_throws ArgumentError AP.julia_step_header(gain_spec)
+    end
+
+    juliac_ready = VERSION >= v"1.12" && isdefined(JuliaC, :ImageRecipe)
+
+    if !juliac_ready
+        @testset "a Julia step needs Julia >= 1.12" begin
+            @test_throws ErrorException export_plugin(jl_gain_spec, joinpath(dir, "jl_gain.clap"))
+        end
+    else
+        # The probe is the host: a plain C program over csrc/clap_host.c. A
+        # juliac plugin brings its own libjulia, and this Julia process
+        # already has one loaded, so it must be hosted from another process.
+        probe = joinpath(dir, "probe_step")
+        let cc = AP._c_compiler(), host = clap_src_path(), src = joinpath(FIX, "probe_step.c")
+            dl = Sys.islinux() ? ["-ldl"] : String[]
+            run(`$cc -O2 -Wall -Wextra -o $probe $src $host $dl -lm`)
+        end
+        function probe_run(bundle, x, block; sr = 48000, params = ())
+            args = [bundle, string(sr), string(block), string(length(x) ÷ block)]
+            for (id, v) in params
+                push!(args, string(id), repr(Float64(v)))
+            end
+            input = join((repr(Float64(v)) for v in x), "\n") * "\n"
+            out = read(pipeline(`$probe $args`; stdin = IOBuffer(input)), String)
+            lines = split(out, '\n'; keepempty = false)
+            meta = String[l for l in lines if startswith(l, "#")]
+            y = [parse(Float64, l) for l in lines if !startswith(l, "#")]
+            return (; meta, y)
+        end
+
+        jl_gain = export_plugin(jl_gain_spec, joinpath(dir, "jl_gain.clap"))
+        jl_eq = export_plugin(jl_eq_spec, joinpath(dir, "jl_eq.clap"))
+
+        @testset "the juliac bundle enumerates as described" begin
+            @test ispath(jl_gain) && ispath(jl_eq)
+            r = probe_run(jl_gain, signal(64), 64)
+            @test "# plugins 1" in r.meta
+            @test "# plugin $(jl_gain_spec.id)|Fixture Gain (Julia)" in r.meta
+            @test "# name Fixture Gain (Julia)" in r.meta
+            @test "# params 2" in r.meta
+            @test "# param 0|Gain|0|4|1" in r.meta
+            @test "# param 7|Bypass|0|1|0" in r.meta
+            @test length(r.y) == 64
+        end
+
+        @testset "juliac gain at 0.5: y == x * 0.5, sample-exactly" begin
+            x = signal(64)
+            @test probe_run(jl_gain, x, 64; params = ((0, 0.5),)).y == x .* 0.5
+            @test probe_run(jl_gain, x, 64).y == x                      # default gain 1
+            @test probe_run(jl_gain, x, 64; params = ((0, 0.5), (7, 1.0))).y == x   # bypassed
+            @test probe_run(jl_gain, x, 64; params = ((0, 9.0),)).y == x .* 4       # clamped
+        end
+
+        @testset "juliac EQ matches the RBJ recursion, 2 x 128 == 1 x 256, three rates" begin
+            x = signal(256)
+            whole = probe_run(jl_eq, x, 256; params = eq_params).y
+            @test maximum(abs.(whole .- rbj_peaking(x, 48000, f0, q, gdb))) < eq_tol
+            @test maximum(abs.(whole .- x)) > 1e-2
+            split = probe_run(jl_eq, x, 128; params = eq_params).y     # two blocks, one instance
+            @test split == whole
+            restarted = vcat(probe_run(jl_eq, x[1:128], 128; params = eq_params).y,
+                             probe_run(jl_eq, x[129:256], 128; params = eq_params).y)
+            @test restarted != whole
+            outs = [probe_run(jl_eq, x, 256; sr = fs, params = eq_params).y
+                    for fs in (44100, 48000, 96000)]
+            for (fs, y) in zip((44100, 48000, 96000), outs)
+                @test maximum(abs.(y .- rbj_peaking(x, fs, f0, q, gdb))) < eq_tol
+            end
+            @test outs[1] != outs[2] && outs[2] != outs[3]
+        end
+
+        if Sys.islinux()
+            @testset "bundle = true ships the runtime next to the plugin" begin
+                spec = PluginSpec(; id = jl_eq_spec.id, name = jl_eq_spec.name, base = jl_eq_spec.base,
+                                  step = JuliaStep(; file = jl_eq_spec.step.file, bundle = true),
+                                  inputs = jl_eq_spec.inputs, params = jl_eq_spec.params,
+                                  sample_rate_field = "fs", constants = jl_eq_spec.constants)
+                out = joinpath(dir, "shipped", "jl_eq.clap")
+                @test export_plugin(spec, out) == out
+                layout = AP.runtime_layout(CLAP(), out)
+                @test isdir(joinpath(layout.dir, "lib", "julia"))
+                @test any(startswith("libjulia."), readdir(joinpath(layout.dir, "lib")))
+                @test !isfile(joinpath(layout.dir, "lib", "libjl_eq.so"))   # moved into the .clap
+                # The rpath, not the build machine's Julia, is what finds the runtime.
+                runpath = read(`readelf -d $out`, String)
+                @test occursin("\$ORIGIN/jl_eq.clap.runtime/lib", runpath)
+                @test !occursin(Sys.BINDIR, runpath)
+                x = signal(256)
+                y = probe_run(out, x, 256; params = eq_params).y
+                @test maximum(abs.(y .- rbj_peaking(x, 48000, f0, q, gdb))) < eq_tol
+                # Exporting again over the same path replaces the runtime.
+                @test export_plugin(spec, out) == out
+                @test isdir(joinpath(layout.dir, "lib", "julia"))
+            end
+        end
+    end
 end
