@@ -81,9 +81,9 @@ expectation is arithmetic rather than a recording:
   input, which is what proves state survives block boundaries;
 - `ap.lookahead` — reported latency is real and is surfaced rather than silently absorbed.
 
-## Authoring: from a C step function to a plugin
+## Authoring: from a step function to a plugin
 
-`export_plugin` builds a plugin bundle around any C function of the shape
+`export_plugin` builds a plugin bundle around any step function of the shape
 
 ```c
 typedef struct MyPars MyPars;
@@ -101,6 +101,30 @@ The wrapper calls `<base>_step` once per sample per channel, with one `<base>_me
 that persists across blocks, and writes host parameter changes straight into the struct
 fields the descriptor names.
 
+The step comes in one of two forms. **C source with a header** (`CStep`), compiled by the
+system compiler. Or **Julia `@ccallable` functions** (`JuliaStep`), compiled by
+[juliac](https://github.com/JuliaLang/JuliaC.jl) into a trimmed shared library — the
+wrapper and the Julia image become one bundle:
+
+```julia
+struct GainPars; gain::Float64; bypass::Bool; end
+struct GainMem; ticks::Int64; end
+struct GainOut; y::Float64; end
+
+Base.@ccallable function my_fx_step(u::Float64, pars::Ptr{GainPars}, self::Ptr{GainMem})::GainOut
+    p = unsafe_load(pars)
+    return GainOut(p.bypass ? u : p.gain * u)
+end
+Base.@ccallable function my_fx_reset(self::Ptr{GainMem})::Cvoid
+    unsafe_store!(self, GainMem(0))
+    return nothing
+end
+```
+
+The structs are read off the `@ccallable` signature and declared to C by a generated header
+(with `_Static_assert`s of every size and offset), so nothing about the layout is written
+twice.
+
 The descriptor is a TOML file, and it names no code generator:
 
 ```toml
@@ -110,13 +134,14 @@ name = "Example Gain"
 
 [abi]
 base = "my_fx"
-pars = "MyPars"
+pars = "MyPars"               # the C header's parameter struct (C step only)
 sample_rate_field = "fs"      # optional: the host's rate lands in pars->fs on activate
 
 [build]
-source = "my_fx.c"
+source = "my_fx.c"            # a C step ...
 header = "my_fx.h"
 pkgconfig = "my_fx.pc"        # optional: Cflags and Libs for compiling and linking source
+# julia = "my_fx.jl"          # ... or a Julia step, with optional project, trim, bundle
 
 [[param]]
 id = 0
@@ -131,19 +156,22 @@ default = 1.0
 using AudioPlugins
 spec = read_plugin_spec("my_fx.toml")
 export_plugin(spec, "MyGain.clap")             # a .clap on Linux/Windows, a bundle dir on macOS
-clap_open!("MyGain.clap"; block_size = 64)      # and host it, right here
+clap_open!("MyGain.clap"; block_size = 64)      # and host it, right here (C steps)
 ```
 
-The same package hosts what it builds, so `test/export_tests.jl` proves the seam with two
-hand-written step functions under `test/export/` and no generator anywhere: a gain that is
-sample-exact at 0.5, and an RBJ peaking EQ whose output matches the reference recursion,
-is bitwise identical whether processed as 2 × 128 or 1 × 256 frames, and is a different,
-correct filter at each of 44.1, 48 and 96 kHz because the sample rate arrives as a parameter.
+The same package hosts what it builds, so `test/export_tests.jl` proves the seam with
+hand-written step functions under `test/export/` in both C and Julia and no generator
+anywhere: a gain that is sample-exact at 0.5, and an RBJ peaking EQ whose output matches the
+reference recursion, is bitwise identical whether processed as 2 × 128 or 1 × 256 frames,
+and is a different, correct filter at each of 44.1, 48 and 96 kHz because the sample rate
+arrives as a parameter.
 
 What the exporter needs and does not need:
 
 - **A C compiler** (`cc`, `gcc` or `clang` on `PATH`, or `compiler = ...`), for authoring only.
   Hosting stays toolchain-free.
+- **For Julia steps, `using JuliaC` and Julia ≥ 1.12.** JuliaC is a weak dependency; the
+  `AudioPluginsJuliaCExt` extension does the build.
 - **Link flags from the `.pc` file**, not a hardcoded `-lm`: that is how libraries the
   generated C calls into reach the link line, and an undefined symbol fails the link rather
   than the first `dlopen`.
@@ -151,10 +179,29 @@ What the exporter needs and does not need:
 - **Formats register themselves.** `CLAP` ships here; a format whose SDK cannot be vendored
   publicly subtypes `PluginFormat` out of tree and calls `register_plugin_format!`.
 
+### What a Julia step brings with it
+
+A juliac-built plugin is pure native code for the step itself, but it links `libjulia` and
+initialises a Julia runtime when the host loads it. Consequences:
+
+- **Where the runtime is found.** By default the plugin's rpath points at the absolute path of
+  the Julia that built it, which runs on that machine only. `JuliaStep(bundle = true)` copies
+  the runtime (about 120 MB of libraries) next to the plugin — `Name.clap.runtime/` beside a
+  Linux `.clap`, `Contents/Resources/julia/` inside a macOS bundle — with a relative rpath, and
+  that is the relocatable form.
+- **One runtime per process.** Two juliac plugins in the same host share, and fight over, one
+  `libjulia` unless each bundles a privatised runtime (JuliaC's `--privatize`), which this
+  package does not drive yet. For the same reason a juliac plugin cannot be hosted from
+  inside the Julia process that built it: the test suite hosts them from a C probe
+  (`test/export/probe_step.c`) in a separate process, which is also the public CI story.
+- **Realtime.** JuliaC disables Julia's signal handlers and pins the runtime to one thread
+  for a library, and an isbits step allocates nothing, but the garbage collector still exists
+  in the audio callback. A C step has no such caveat.
+
 Not yet: the output must be on the base clock — the descriptor has no way to name a
 `has_<name>` presence flag, so a sub-clock output cannot be exported; there is no
 `clap.state` extension, so a DAW session will not persist parameter values across reload;
-Windows bundles are built but not exercised in CI.
+Windows bundles are built but not exercised in CI; Julia-step bundling is tested on Linux only.
 
 ## LV2 discovery is missing, and why
 
