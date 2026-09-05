@@ -1,0 +1,10 @@
+# What a code generator's pkg-config file looks like: the libraries its
+# emitted C calls into, here libm for sin/cos/pow.
+prefix=/nonexistent
+includedir=${prefix}/include
+
+Name: fx_eq
+Description: RBJ peaking equaliser fixture
+Version: 0.1.0
+Cflags: -I${includedir}
+Libs: -lm
