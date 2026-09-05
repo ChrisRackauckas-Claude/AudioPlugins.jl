@@ -2,7 +2,8 @@
     AudioPlugins
 
 Headless hosting of third-party audio plugins from Julia, behind a C ABI of
-scalar doubles.
+scalar doubles — and, in the other direction, authoring plugins from a
+per-sample C step function (see [`export_plugin`](@ref)).
 
 Two formats today: **CLAP** (MIT, header-only) and **LV2** (ISC) — see the
 README for what is implemented in each. The host is deliberately a thin C layer
@@ -27,5 +28,6 @@ stay in the package for a generated C program to link directly.
 module AudioPlugins
 
 include("clap_io.jl")
+include("plugin_export.jl")
 
 end # module

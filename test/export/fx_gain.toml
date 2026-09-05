@@ -1,0 +1,38 @@
+schema = 1
+
+[plugin]
+id = "org.sciml.audioplugins.fixture.gain"
+name = "Fixture Gain"
+vendor = "AudioPlugins.jl"
+version = "0.1.0"
+description = "y = bypass ? u : gain * u, from a hand-written step function"
+features = ["audio-effect", "utility"]
+channels = 2
+
+[abi]
+base = "fx_gain"
+pars = "FxGainPars"
+inputs = [{ name = "u", role = "audio" }, { name = "clock1", role = "clock" }]
+output = "y"
+
+[build]
+source = "fx_gain.c"
+header = "fx_gain.h"
+
+[[param]]
+id = 0
+name = "Gain"
+field = "gain"
+min = 0.0
+max = 4.0
+default = 1.0
+
+[[param]]
+id = 7
+name = "Bypass"
+field = "bypass"
+min = 0.0
+max = 1.0
+default = 0.0
+stepped = true
+ctype = "bool"

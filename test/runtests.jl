@@ -181,3 +181,5 @@ sha_free(x) = x  # (no fixtures to checksum: the plugin is built from source her
     end
 
 end
+
+include("export_tests.jl")

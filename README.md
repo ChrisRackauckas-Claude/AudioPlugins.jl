@@ -1,6 +1,7 @@
 # AudioPlugins.jl
 
-Headless hosting of third-party audio plugins from Julia, behind a C ABI of scalar doubles.
+Headless hosting of third-party audio plugins from Julia, behind a C ABI of scalar doubles —
+and, in the other direction, authoring plugins from a per-sample C step function.
 
 ```julia
 using AudioPlugins
@@ -27,10 +28,10 @@ standalone C program links `clap_host.c` directly, with no Julia present.
 the source it was built from; `CLAPHost_jll`'s version tracks the release of this
 package whose `csrc/` it was built from.
 
-The only thing that needs a C compiler is building the *test* plugins
-(`clap_test_bundle()`), and those go into a per-package scratch space, so a
-read-only installation hosts plugins fine and fails only at test time, with a
-message that says so.
+The only things that need a C compiler are building the *test* plugins
+(`clap_test_bundle()`), which go into a per-package scratch space, and authoring
+your own with `export_plugin`. A read-only installation hosts plugins fine and
+fails only at test or export time, with a message that says so.
 
 To work on `csrc/clap_host.c` itself, build it locally and point the JLL at your
 build through a preference, then restart Julia:
@@ -79,6 +80,81 @@ expectation is arithmetic rather than a recording:
 - `ap.onepole` — two consecutive blocks equal one continuous run over the concatenated
   input, which is what proves state survives block boundaries;
 - `ap.lookahead` — reported latency is real and is surfaced rather than silently absorbed.
+
+## Authoring: from a C step function to a plugin
+
+`export_plugin` builds a plugin bundle around any C function of the shape
+
+```c
+typedef struct MyPars MyPars;
+struct MyPars { double gain; /* ... */ };
+typedef struct { /* state */ } my_fx_mem;
+typedef struct { double y; } my_fx_out;
+
+my_fx_out my_fx_step(double u, MyPars *pars, my_fx_mem *self);
+void      my_fx_reset(my_fx_mem *self);
+```
+
+which is what a fixed-step code generator emits: a named parameter struct passed by typed
+pointer, a per-instance state struct, a result struct, and `<base>_step` / `<base>_reset`.
+The wrapper calls `<base>_step` once per sample per channel, with one `<base>_mem` per channel
+that persists across blocks, and writes host parameter changes straight into the struct
+fields the descriptor names.
+
+The descriptor is a TOML file, and it names no code generator:
+
+```toml
+[plugin]
+id = "org.example.gain"
+name = "Example Gain"
+
+[abi]
+base = "my_fx"
+pars = "MyPars"
+sample_rate_field = "fs"      # optional: the host's rate lands in pars->fs on activate
+
+[build]
+source = "my_fx.c"
+header = "my_fx.h"
+pkgconfig = "my_fx.pc"        # optional: Cflags and Libs for compiling and linking source
+
+[[param]]
+id = 0
+name = "Gain"
+field = "gain"
+min = 0.0
+max = 4.0
+default = 1.0
+```
+
+```julia
+using AudioPlugins
+spec = read_plugin_spec("my_fx.toml")
+export_plugin(spec, "MyGain.clap")             # a .clap on Linux/Windows, a bundle dir on macOS
+clap_open!("MyGain.clap"; block_size = 64)      # and host it, right here
+```
+
+The same package hosts what it builds, so `test/export_tests.jl` proves the seam with two
+hand-written step functions under `test/export/` and no generator anywhere: a gain that is
+sample-exact at 0.5, and an RBJ peaking EQ whose output matches the reference recursion,
+is bitwise identical whether processed as 2 × 128 or 1 × 256 frames, and is a different,
+correct filter at each of 44.1, 48 and 96 kHz because the sample rate arrives as a parameter.
+
+What the exporter needs and does not need:
+
+- **A C compiler** (`cc`, `gcc` or `clang` on `PATH`, or `compiler = ...`), for authoring only.
+  Hosting stays toolchain-free.
+- **Link flags from the `.pc` file**, not a hardcoded `-lm`: that is how libraries the
+  generated C calls into reach the link line, and an undefined symbol fails the link rather
+  than the first `dlopen`.
+- **No licence machinery.** The output is a plain, royalty-free bundle with nothing embedded.
+- **Formats register themselves.** `CLAP` ships here; a format whose SDK cannot be vendored
+  publicly subtypes `PluginFormat` out of tree and calls `register_plugin_format!`.
+
+Not yet: the output must be on the base clock — the descriptor has no way to name a
+`has_<name>` presence flag, so a sub-clock output cannot be exported; there is no
+`clap.state` extension, so a DAW session will not persist parameter values across reload;
+Windows bundles are built but not exercised in CI.
 
 ## LV2 discovery is missing, and why
 
