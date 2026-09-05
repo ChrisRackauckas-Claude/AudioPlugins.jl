@@ -247,8 +247,11 @@ Optional:
   * `channels` — channels per port, default `2`; one `<base>_mem` per channel;
   * `inputs` — the step arguments before `pars`, as [`StepInput`](@ref)s;
     default one `:audio` input. Exactly one must be `:audio`;
-  * `output` — the field of `<base>_out` carrying the sample, default `"y"`.
-    Outputs on a sub-clock (carrying a `has_<name>` flag) are not supported;
+  * `output` — the field of `<base>_out` carrying the sample, default `"y"`;
+  * `sub_clock` — `true` when the output is on a clock slower than the
+    sample clock: `<base>_out` then also carries a `bool has_<output>`
+    presence flag, and on a sample where it is false the wrapper holds the
+    last present value per channel (zero until the first). Default `false`;
   * `sample_rate_field` — a field of the parameter struct to write the
     host's sample rate into on activate, so one bundle serves every rate;
   * `params` — [`PluginParam`](@ref)s;
@@ -270,6 +273,7 @@ struct PluginSpec
     pars::String
     inputs::Vector{StepInput}
     output::String
+    sub_clock::Bool
     sample_rate_field::Union{Nothing, String}
     params::Vector{PluginParam}
     constants::Vector{Pair{String, Any}}
@@ -281,7 +285,7 @@ function PluginSpec(; id, name, base, step = nothing, pars = "",
                     include_dirs = String[],
                     vendor = "", version = "0.0.0", description = "", url = "",
                     features = ["audio-effect"], channels::Integer = 2,
-                    inputs = [StepInput("u", :audio)], output = "y",
+                    inputs = [StepInput("u", :audio)], output = "y", sub_clock::Bool = false,
                     sample_rate_field = nothing, params = PluginParam[],
                     constants = Pair{String, Any}[])
     isempty(id) && throw(ArgumentError("plugin id must not be empty"))
@@ -317,7 +321,7 @@ function PluginSpec(; id, name, base, step = nothing, pars = "",
     end
     return PluginSpec(String(id), String(name), String(vendor), String(version),
                       String(description), String(url), String[features...], Int(channels),
-                      String(base), String(pars), inputs, String(output),
+                      String(base), String(pars), inputs, String(output), sub_clock,
                       sample_rate_field === nothing ? nothing : String(sample_rate_field),
                       params, consts, step)
 end
@@ -325,8 +329,8 @@ end
 "The same spec with the parameter struct named `pars`."
 _with_pars(s::PluginSpec, pars::AbstractString) =
     PluginSpec(s.id, s.name, s.vendor, s.version, s.description, s.url, s.features, s.channels,
-               s.base, String(pars), s.inputs, s.output, s.sample_rate_field, s.params,
-               s.constants, s.step)
+               s.base, String(pars), s.inputs, s.output, s.sub_clock, s.sample_rate_field,
+               s.params, s.constants, s.step)
 
 function _check_c_ident(s, what)
     occursin(r"^[A-Za-z_][A-Za-z0-9_]*$", s) ||
@@ -356,6 +360,7 @@ base = "ex_gain"              # ex_gain_step, ex_gain_reset, ex_gain_mem, ex_gai
 pars = "ExGainPars"           # the parameter struct declared in the C header (C step only)
 inputs = [{ name = "u", role = "audio" }, { name = "clock", role = "clock" }]
 output = "y"                  # field of ex_gain_out; optional, default "y"
+sub_clock = false             # optional: true if ex_gain_out also carries `bool has_y`
 sample_rate_field = "fs"      # optional
 
 [build]                       # a C step ...
@@ -424,7 +429,7 @@ function read_plugin_spec(path::AbstractString)
         channels = get(plugin, "channels", 2),
         base = abi["base"], pars = get(abi, "pars", ""), step,
         inputs = isempty(inputs) ? [StepInput("u", :audio)] : inputs,
-        output = get(abi, "output", "y"),
+        output = get(abi, "output", "y"), sub_clock = get(abi, "sub_clock", false),
         sample_rate_field = get(abi, "sample_rate_field", nothing),
         params, constants = collect(get(d, "constants", Dict{String, Any}())))
 end
@@ -515,6 +520,11 @@ function julia_step_header(spec::PluginSpec)
     end
     hasfield(O, Symbol(spec.output)) ||
         throw(ArgumentError("$stepname: output struct $O has no field $(spec.output)"))
+    if spec.sub_clock
+        flag = Symbol("has_", spec.output)
+        hasfield(O, flag) && fieldtype(O, flag) === Bool ||
+            throw(ArgumentError("$stepname: a sub-clock output needs a Bool field $flag in $O"))
+    end
     rrt, rparams = _ccallable_signature(mod, resetname, step.file)
     (rrt === Nothing || rrt === Cvoid) && rparams == [Ptr{M}] ||
         throw(ArgumentError("$resetname must be declared as ($resetname(self::Ptr{$M})::Cvoid), " *
@@ -725,6 +735,10 @@ function _clap_substitutions(spec::PluginSpec)
     constants = join(("s->pars.$k = $(_c_literal(v));" for (k, v) in spec.constants), "\n    ")
     on_activate = spec.sample_rate_field === nothing ? "(void)sr;" :
                   "s->pars.$(spec.sample_rate_field) = sr;"
+    output_read = spec.sub_clock ?
+                  "if (o.has_$(spec.output)) s->held[c] = o.$(spec.output);\n" *
+                  "            double y = s->held[c];" :
+                  "double y = o.$(spec.output);"
     return Dict(
         "HEADER" => spec.base * ".h",
         "BASE" => spec.base,
@@ -744,6 +758,7 @@ function _clap_substitutions(spec::PluginSpec)
         "ON_ACTIVATE" => on_activate,
         "STEP_ARGS" => step_args * ",",
         "OUTPUT" => spec.output,
+        "OUTPUT_READ" => output_read,
         "CONSTANTS" => constants,
     )
 end

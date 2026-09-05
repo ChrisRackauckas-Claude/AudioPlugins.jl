@@ -203,9 +203,13 @@ values it was saved with: a small little-endian blob of `(id, value)` pairs, che
 `test/export/probe_state.c`, a minimal host that saves, loads into a fresh instance, and
 offers garbage.
 
-Not yet: the output must be on the base clock — the descriptor has no way to name a
-`has_<name>` presence flag, so a sub-clock output cannot be exported; Windows bundles are
-built but not exercised in CI; Julia-step bundling is tested on Linux only.
+An output on a clock slower than the sample clock is declared with `sub_clock = true`: the
+output struct then also carries a `bool has_<output>` presence flag, and on samples where it
+is false the wrapper holds the last present value per channel. The phase lives in the step's
+own state, so it carries across blocks like everything else.
+
+Not yet: Windows bundles are built but not exercised in CI; Julia-step bundling is tested on
+Linux only.
 
 ## LV2 discovery is missing, and why
 

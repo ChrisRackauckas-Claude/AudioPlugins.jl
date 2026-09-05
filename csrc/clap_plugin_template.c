@@ -71,6 +71,7 @@ typedef struct {
     ap_pars_t     pars;
     ap_mem_t      mem[AP_CHANNELS];
     double        values[AP_N_PARAMS + 1];
+    double        held[AP_CHANNELS];    /* last present output, for a sub-clock output */
     int           activated;
     int           processing;
 } inst_t;
@@ -99,6 +100,7 @@ static void set_param(inst_t *s, int index, double v) {
 
 static void reset_state(inst_t *s) {
     for (int c = 0; c < AP_CHANNELS; c++) @BASE@_reset(&s->mem[c]);
+    memset(s->held, 0, sizeof s->held);
 }
 
 static void apply_event(inst_t *s, const clap_event_header_t *h) {
@@ -356,7 +358,7 @@ static clap_process_status plug_process(const clap_plugin_t *p, const clap_proce
         for (uint32_t c = 0; c < nch; c++) {
             double x = in->data32 ? (double)in->data32[c][i] : in->data64[c][i];
             ap_out_t o = @BASE@_step(@STEP_ARGS@ &s->pars, &s->mem[c]);
-            double y = o.@OUTPUT@;
+            @OUTPUT_READ@
             if (out->data32) out->data32[c][i] = (float)y;
             else             out->data64[c][i] = y;
         }
