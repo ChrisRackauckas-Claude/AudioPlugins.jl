@@ -33,8 +33,15 @@ const FIX_STATE = joinpath(@__DIR__, "export")
     gain = export_plugin(gain_spec, joinpath(dir, "fx_gain.clap"))
     bundles = ["C" => gain]
 
-    if VERSION >= v"1.12" && isdefined(JuliaC, :ImageRecipe) && !Sys.iswindows()
+    if VERSION >= v"1.12" && isdefined(JuliaC, :ImageRecipe)
         jl_spec = read_plugin_spec(joinpath(FIX_STATE, "jl_gain.toml"))
+        if Sys.iswindows()
+            # A Julia step ships its runtime on Windows; the .clap is a shim
+            # over it, and probe_state's LoadLibraryA goes through the shim.
+            jl_spec = PluginSpec(; id = jl_spec.id, name = jl_spec.name, base = jl_spec.base,
+                                 inputs = jl_spec.inputs, params = jl_spec.params,
+                                 step = JuliaStep(; file = jl_spec.step.file, bundle = true))
+        end
         push!(bundles, "Julia" => export_plugin(jl_spec, joinpath(dir, "jl_gain.clap")))
     end
 

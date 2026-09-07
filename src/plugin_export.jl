@@ -203,19 +203,23 @@ needs no `pars` name for a Julia step. `project` is the environment the
 file is compiled in (the active one by default) and `trim` the juliac
 trim mode.
 
-Building needs `using JuliaC` and Julia ≥ 1.12, on Linux or macOS: Windows
-has no rpath, so a plugin could not find its runtime, and a Julia step is
-refused there. The plugin links against
+Building needs `using JuliaC` and Julia ≥ 1.12. The plugin links against
 `libjulia` at the building Julia's absolute path; with `bundle = true`
 the runtime is copied next to the plugin and found by a relative rpath,
 which is what makes the bundle relocatable. Either way the plugin brings
 a Julia runtime with it, which has consequences the README spells out.
 
+On Windows `bundle = true` is required: the loader has no rpath, so the
+`.clap` there is a shim that loads the plugin, and the runtime shipped
+with it, from `Name.clap.runtime\\bin` (see [`runtime_layout`](@ref)).
+
 Two such plugins in one host would share, and fight over, one `libjulia`.
 `privatize = true` (needs `bundle = true`) salts the bundled runtime's
 library names and symbol versions, so each plugin loads its own; the salt
 derives from the plugin's name and the Julia version, or pass a string
-(at most 8 characters, a C identifier) to choose it.
+(at most 8 characters, a C identifier) to choose it. JuliaC does this on
+Linux and macOS only; on Windows `privatize` is refused with a pointer to
+the upstream work.
 """
 struct JuliaStep <: StepSource
     file::String
@@ -843,11 +847,20 @@ end
 Where a bundled Julia runtime goes for the plugin at `out`, and the
 rpath, relative to the plugin binary, that finds it: `Name.clap.runtime/`
 beside a Linux or Windows `.clap`, `Contents/Resources/julia/` inside a
-macOS bundle. The runtime's libraries land under `<dir>/lib`.
+macOS bundle. The runtime's libraries land under `<dir>/lib` on Linux and
+macOS.
+
+On Windows there is no rpath (`rpath` is `""`, unused) and the layout is
+turned around: the plugin itself lives at `<dir>/bin/lib<base>.dll` with
+the runtime's DLLs beside it, and `Name.clap` is a small shim
+(`csrc/clap_forward_shim.c`) that loads it from there with
+`LOAD_WITH_ALTERED_SEARCH_PATH`, which is the one way the Windows loader
+searches a DLL's own directory for its imports.
 """
 function runtime_layout(::CLAP, out::AbstractString)
     Sys.isapple() && return (; dir = joinpath(out, "Contents", "Resources", "julia"),
                              rpath = joinpath("..", "Resources", "julia", "lib"))
+    Sys.iswindows() && return (; dir = out * ".runtime", rpath = "")
     return (; dir = out * ".runtime", rpath = joinpath(basename(out) * ".runtime", "lib"))
 end
 
@@ -889,7 +902,9 @@ file, and an undefined symbol fails the link rather than the first
 For a [`JuliaStep`](@ref): the step's structs are read off its
 `@ccallable` signature and declared by a generated header, and juliac
 compiles the Julia file and the wrapper into one trimmed shared library.
-This needs `using JuliaC` and Julia ≥ 1.12.
+This needs `using JuliaC` and Julia ≥ 1.12. On Windows that library goes
+into `Name.clap.runtime\\bin` with its runtime and the `.clap` is a shim
+that loads it, so `bundle = true` is required there.
 
 Both need a C compiler: `cc`, `gcc` or `clang` on `PATH`, or
 `compiler = "/path/to/cc"`. Hosting plugins does not.
