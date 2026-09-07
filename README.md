@@ -175,9 +175,9 @@ What the exporter needs and does not need:
 
 - **A C compiler** (`cc`, `gcc` or `clang` on `PATH`, or `compiler = ...`), for authoring only.
   Hosting stays toolchain-free.
-- **For Julia steps, `using JuliaC` and Julia ≥ 1.12, on Linux or macOS.** JuliaC is a weak
-  dependency; the `AudioPluginsJuliaCExt` extension does the build. Windows has no rpath, so
-  a plugin could not find its runtime; a Julia step is refused there until that is solved.
+- **For Julia steps, `using JuliaC` and Julia ≥ 1.12.** JuliaC is a weak dependency; the
+  `AudioPluginsJuliaCExt` extension does the build. On Windows a Julia step must be bundled
+  (`bundle = true`); see below for why the `.clap` is a shim there.
 - **Link flags from the `.pc` file**, not a hardcoded `-lm`: that is how libraries the
   generated C calls into reach the link line, and an undefined symbol fails the link rather
   than the first `dlopen`.
@@ -195,13 +195,25 @@ initialises a Julia runtime when the host loads it. Consequences:
   the runtime (about 120 MB of libraries) next to the plugin — `Name.clap.runtime/` beside a
   Linux `.clap`, `Contents/Resources/julia/` inside a macOS bundle — with a relative rpath, and
   that is the relocatable form.
+- **Windows has no rpath**, and the loader resolves a DLL's imports from the host executable's
+  directory, the system directories and `PATH` — never from the DLL's own directory unless it
+  was opened with `LOAD_WITH_ALTERED_SEARCH_PATH`, which a DAW does not do. So on Windows a
+  Julia step is always bundled, the plugin DLL and the runtime go together into
+  `Name.clap.runtime\bin`, and `Name.clap` is a small shim (`csrc/clap_forward_shim.c`, no
+  Julia in it) whose `clap_entry` loads the real plugin from beside itself with that flag, puts
+  the same directory at the front of the process `PATH` for the libraries Julia opens by name
+  at start-up, and forwards `get_factory` and `deinit`. The test suite hosts such a bundle with
+  nothing of Julia's on `PATH`.
 - **One runtime per process, unless privatised.** Two juliac plugins in the same host would
   share, and fight over, one `libjulia`. `JuliaStep(bundle = true, privatize = true)` salts
   the bundled runtime's library names and symbol versions (JuliaC's `--privatize`), so each
   plugin loads its own; `test/export/probe_two.c` loads two such plugins into one process
-  and runs audio through both. A juliac plugin still cannot be hosted from inside the Julia
-  process that built it: the test suite hosts them from C probes in a separate process,
-  which is also the public CI story.
+  and runs audio through both. JuliaC salts on Linux and macOS only, so on Windows
+  `privatize` is refused with a pointer to the upstream issue
+  ([JuliaC.jl #186](https://github.com/JuliaLang/JuliaC.jl/issues/186)): two juliac plugins in
+  one Windows host would still share, and fight over, one `libjulia.dll`. A juliac plugin
+  still cannot be hosted from inside the Julia process that built it: the test suite hosts
+  them from C probes in a separate process, which is also the public CI story.
 - **Realtime.** JuliaC disables Julia's signal handlers and pins the runtime to one thread
   for a library, and an isbits step allocates nothing, but the garbage collector still exists
   in the audio callback. A C step has no such caveat.
@@ -216,7 +228,8 @@ output struct then also carries a `bool has_<output>` presence flag, and on samp
 is false the wrapper holds the last present value per channel. The phase lives in the step's
 own state, so it carries across blocks like everything else.
 
-Not yet: Julia steps on Windows (above); Julia-step bundling is tested on Linux only.
+Not yet: privatised (coexisting) Julia steps on Windows, see above; Julia-step bundling is
+tested on Linux and Windows, not on macOS.
 
 ## LV2 discovery is missing, and why
 

@@ -34,6 +34,27 @@ end
 f32(x) = Float64.(Float32.(x))
 signal(n) = f32([0.4sin(2pi * 0.013i) + 0.3sin(2pi * 0.171i) for i in 0:(n - 1)])
 
+# On Windows a Julia step ships its runtime (the .clap is a shim over
+# Name.clap.runtime\bin, see the extension), so the fixtures are bundled
+# there and built plain, against the running Julia, elsewhere.
+function bundled_on_windows(spec)
+    Sys.iswindows() || return spec
+    s = spec.step::JuliaStep
+    return PluginSpec(; id = spec.id, name = spec.name, vendor = spec.vendor, version = spec.version,
+                      description = spec.description, url = spec.url, features = spec.features,
+                      channels = spec.channels, base = spec.base, inputs = spec.inputs,
+                      output = spec.output, sub_clock = spec.sub_clock,
+                      sample_rate_field = spec.sample_rate_field, params = spec.params,
+                      constants = spec.constants,
+                      step = JuliaStep(; file = s.file, project = s.project, trim = s.trim, bundle = true))
+end
+
+# A PATH with nothing of Julia's on it, for hosting a bundled plugin the way
+# a DAW would: on CI the building Julia is on PATH, and its bin directory
+# would satisfy the runtime's imports and hide a bundle that does not.
+julia_free_path() = join(filter(p -> !occursin("julia", lowercase(p)), split(ENV["PATH"], Sys.iswindows() ? ';' : ':')),
+                         Sys.iswindows() ? ';' : ':')
+
 function process(x, params...)
     t = clap_fill!(x)
     slots = fill(-1.0, 8)
@@ -376,8 +397,10 @@ end
         @test JuliaStep(; file = joinpath(FIX, "jl_gain.jl"), bundle = true, privatize = "ap").privatize == "ap"
         mktempdir() do d
             toml = read(joinpath(FIX, "jl_gain.toml"), String)
+            # Forward slashes: a backslash in a TOML basic string is an escape.
+            file = replace(joinpath(FIX, "jl_gain.jl"), '\\' => '/')
             toml = replace(toml, "julia = \"jl_gain.jl\"" =>
-                                 "julia = \"$(joinpath(FIX, "jl_gain.jl"))\"\nbundle = true\nprivatize = true")
+                                 "julia = \"$file\"\nbundle = true\nprivatize = true")
             write(joinpath(d, "p.toml"), toml)
             @test read_plugin_spec(joinpath(d, "p.toml")).step.privatize === true
         end
@@ -428,18 +451,18 @@ end
         @test_throws ArgumentError AP.julia_step_header(gain_spec)
     end
 
-    juliac_ready = VERSION >= v"1.12" && isdefined(JuliaC, :ImageRecipe) && !Sys.iswindows()
+    juliac_ready = VERSION >= v"1.12" && isdefined(JuliaC, :ImageRecipe)
 
     if !juliac_ready
-        @testset "a Julia step needs Julia >= 1.12 on Linux or macOS" begin
+        @testset "a Julia step needs Julia >= 1.12" begin
             @test_throws ErrorException export_plugin(jl_gain_spec, joinpath(dir, "jl_gain.clap"))
         end
     else
-        jl_gain = export_plugin(jl_gain_spec, joinpath(dir, "jl_gain.clap"))
-        jl_eq = export_plugin(jl_eq_spec, joinpath(dir, "jl_eq.clap"))
+        jl_gain = export_plugin(bundled_on_windows(jl_gain_spec), joinpath(dir, "jl_gain.clap"))
+        jl_eq = export_plugin(bundled_on_windows(jl_eq_spec), joinpath(dir, "jl_eq.clap"))
         probe_suite("Julia step", jl_gain_spec, jl_gain, jl_eq)
 
-        if Sys.islinux()
+        if Sys.islinux() || Sys.iswindows()
             @testset "bundle = true ships the runtime next to the plugin" begin
                 spec = PluginSpec(; id = jl_eq_spec.id, name = jl_eq_spec.name, base = jl_eq_spec.base,
                                   step = JuliaStep(; file = jl_eq_spec.step.file, bundle = true),
@@ -448,19 +471,33 @@ end
                 out = joinpath(dir, "shipped", "jl_eq.clap")
                 @test export_plugin(spec, out) == out
                 layout = AP.runtime_layout(CLAP(), out)
-                @test isdir(joinpath(layout.dir, "lib", "julia"))
-                @test any(startswith("libjulia."), readdir(joinpath(layout.dir, "lib")))
-                @test !isfile(joinpath(layout.dir, "lib", "libjl_eq.so"))   # moved into the .clap
-                # The rpath, not the build machine's Julia, is what finds the runtime.
-                runpath = read(`readelf -d $out`, String)
-                @test occursin("\$ORIGIN/jl_eq.clap.runtime/lib", runpath)
-                @test !occursin(Sys.BINDIR, runpath)
+                # JuliaC's layout: lib/julia on Linux, everything flat in bin on Windows.
+                runtime_shipped() = Sys.iswindows() ? isfile(joinpath(layout.dir, "bin", "libjulia.dll")) :
+                                    isdir(joinpath(layout.dir, "lib", "julia"))
+                @test runtime_shipped()
+                @test any(startswith("libjulia"), readdir(joinpath(layout.dir, Sys.iswindows() ? "bin" : "lib")))
+                if Sys.islinux()
+                    @test !isfile(joinpath(layout.dir, "lib", "libjl_eq.so"))   # moved into the .clap
+                    # The rpath, not the build machine's Julia, is what finds the runtime.
+                    runpath = read(`readelf -d $out`, String)
+                    @test occursin("\$ORIGIN/jl_eq.clap.runtime/lib", runpath)
+                    @test !occursin(Sys.BINDIR, runpath)
+                else
+                    # The .clap is the shim: tens of KB, no Julia in it, no path
+                    # baked in. The plugin is the DLL beside the runtime.
+                    @test filesize(out) < 512 * 1024
+                    @test !occursin(Sys.BINDIR, String(read(out)))
+                    @test isfile(joinpath(layout.dir, "bin", "libjl_eq.dll"))
+                end
                 x = signal(256)
-                y = probe_run(out, x, 256; params = eq_params).y
+                # Hosted with nothing of Julia's on PATH, as a DAW would.
+                y = withenv("PATH" => julia_free_path()) do
+                    probe_run(out, x, 256; params = eq_params).y
+                end
                 @test maximum(abs.(y .- rbj_peaking(x, 48000, f0, q, gdb))) < eq_tol
                 # Exporting again over the same path replaces the runtime.
                 @test export_plugin(spec, out) == out
-                @test isdir(joinpath(layout.dir, "lib", "julia"))
+                @test runtime_shipped()
             end
         end
 
@@ -471,7 +508,7 @@ end
             @test_throws ArgumentError AP.julia_step_header(PluginSpec(;
                 id = jl_gain_spec.id, name = jl_gain_spec.name, base = jl_gain_spec.base,
                 step = jl_gain_spec.step, inputs = jl_gain_spec.inputs, sub_clock = true))
-            jl_decim = export_plugin(jl_decim_spec, joinpath(dir, "jl_decim.clap"))
+            jl_decim = export_plugin(bundled_on_windows(jl_decim_spec), joinpath(dir, "jl_decim.clap"))
             x = signal(96)
             @test probe_run(jl_decim, x, 96; params = ((0, 0.5), (1, 3.0))).y == decimate_hold(x, 3, 0.5)
             @test probe_run(jl_decim, x, 32; params = ((0, 1.0), (1, 5.0))).y == decimate_hold(x, 5, 1.0)
@@ -527,6 +564,24 @@ end
                 eq_n = shipped(jl_eq_spec, "plain", false)
                 @test !both(gain_n, eq_n).ok
                 @test both(gain_p, gain_p).ok             # the same plugin twice is fine
+            end
+        else
+            @testset "on Windows a Julia step must be bundled, and cannot be privatised yet" begin
+                # Both are refused before anything is built.
+                plain = joinpath(dir, "jl_gain_plain.clap")
+                err = try export_plugin(jl_gain_spec, plain); nothing catch e; e end
+                @test err isa ErrorException && occursin("bundle = true", err.msg)
+                @test !ispath(plain) && !ispath(plain * ".runtime")
+                priv = PluginSpec(; id = jl_gain_spec.id, name = jl_gain_spec.name,
+                                  base = jl_gain_spec.base, inputs = jl_gain_spec.inputs,
+                                  params = jl_gain_spec.params,
+                                  step = JuliaStep(; file = jl_gain_spec.step.file, bundle = true,
+                                                   privatize = true))
+                out = joinpath(dir, "jl_gain_priv.clap")
+                err = try export_plugin(priv, out); nothing catch e; e end
+                @test err isa ErrorException && occursin("privatize", err.msg)
+                @test occursin("github.com/JuliaLang/JuliaC.jl", err.msg)
+                @test !ispath(out) && !ispath(out * ".runtime")
             end
         end
     end
