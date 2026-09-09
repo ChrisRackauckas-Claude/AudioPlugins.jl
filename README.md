@@ -6,7 +6,7 @@ and, in the other direction, authoring plugins from a per-sample C step function
 ```julia
 using AudioPlugins
 bundle = clap_test_bundle()            # builds the test plugins shipped here
-clap_host_open(bundle, "ap.gain", 48000, 64, 1)
+clap_open!(bundle; plugin_id = "ap.gain", sample_rate = 48000, block_size = 64, channels = 1)
 ```
 
 Two formats:
@@ -41,6 +41,7 @@ fails only at test or export time, with a message that says so.
 To work on `csrc/clap_host.c` itself, build it locally and point the JLL at your
 build through a preference, then restart Julia:
 
+<!-- illustrative -->
 ```julia
 using Preferences, CLAPHost_jll
 set_preferences!(CLAPHost_jll, "libclap_host_path" => "/path/to/libclap_host.so")
@@ -111,6 +112,7 @@ system compiler. Or **Julia `@ccallable` functions** (`JuliaStep`), compiled by
 [juliac](https://github.com/JuliaLang/JuliaC.jl) into a trimmed shared library — the
 wrapper and the Julia image become one bundle:
 
+<!-- illustrative -->
 ```julia
 struct GainPars; gain::Float64; bypass::Bool; end
 struct GainMem; ticks::Int64; end
@@ -157,6 +159,7 @@ max = 4.0
 default = 1.0
 ```
 
+<!-- illustrative -->
 ```julia
 using AudioPlugins
 spec = read_plugin_spec("my_fx.toml")
