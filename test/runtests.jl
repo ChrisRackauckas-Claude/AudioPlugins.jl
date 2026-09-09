@@ -197,3 +197,5 @@ end # clap_host_available()
 include("export_tests.jl")
 
 include("state_tests.jl")
+
+include("readme_tests.jl")
