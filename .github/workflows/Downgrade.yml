@@ -1,0 +1,24 @@
+name: Downgrade
+on:
+  pull_request:
+    branches:
+      - main
+    paths-ignore:
+      - 'docs/**'
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - 'docs/**'
+jobs:
+  downgrade:
+    name: "Downgrade"
+    uses: "SciML/.github/.github/workflows/downgrade.yml@v1"
+    with:
+      julia-version: "lts"
+      # Scratch's own floor (1.0) is fine for this package, but the *test*
+      # environment cannot resolve there: JuliaC pulls RelocatableFolders, which
+      # requires Scratch >= 1.1. Floor-checking it would fail on a test-only
+      # conflict rather than on anything AudioPlugins does with Scratch.
+      skip: "Scratch"
+    secrets: "inherit"

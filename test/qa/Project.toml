@@ -1,0 +1,14 @@
+[deps]
+AudioPlugins = "83119930-5344-4127-8689-15f5870d6d1a"
+JET = "c3a54625-cd67-489e-a8e7-0a5a0ff4e31b"
+JuliaC = "acedd4c2-ced6-4a15-accc-2607eb759ba2"
+SafeTestsets = "1bc83da4-3b8d-516f-aca4-4fe02f6d838f"
+SciMLTesting = "09d9d899-5365-40a9-917a-5f67fddea283"
+Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
+
+[compat]
+JET = "0.9.14, 0.10, 0.11, 0.12"
+JuliaC = "0.3"
+SafeTestsets = "0.1"
+SciMLTesting = "2.13"
+Test = "1"
