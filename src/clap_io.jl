@@ -112,6 +112,11 @@ function _c_compiler()
     return nothing
 end
 
+# The compiler targets the machine, but everything built here has to be loaded
+# by *this* Julia process: a 32-bit Julia on x86_64 hardware needs -m32, or the
+# artefact comes out ELFCLASS64 and will not dlopen.
+_c_arch_flags() = (Sys.WORD_SIZE == 32 && Sys.ARCH === :i686) ? ["-m32"] : String[]
+
 """
     build_clap_host!(; force = false)
 
@@ -143,7 +148,7 @@ hosting and fails here, at test time, with a message that says why.
 """
 function clap_test_bundle(; force::Bool = false)
     src = normpath(joinpath(@__DIR__, "..", "test", "plugins", "ap_test_plugins.c"))
-    dir = @get_scratch!("test_plugins")
+    dir = @get_scratch!("test_plugins-$(Sys.ARCH)")
     out = joinpath(dir, "ap_test.clap")
     if force || !isfile(out) || stat(src).mtime > stat(out).mtime
         cc = _c_compiler()
@@ -151,7 +156,7 @@ function clap_test_bundle(; force::Bool = false)
             "clap_test_bundle: building the test plugins needs a C compiler on PATH " *
             "(tried cc, gcc, clang). Hosting itself does not: the host library comes " *
             "prebuilt from CLAPHost_jll.")
-        run(`$cc -O2 -fPIC -shared -Wall -Wextra -o $out $src`)
+        run(`$cc $(_c_arch_flags()) -O2 -fPIC -shared -Wall -Wextra -o $out $src`)
     end
     return out
 end

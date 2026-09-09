@@ -10,6 +10,14 @@ const AP = AudioPlugins
 
 const FIX = joinpath(@__DIR__, "export")
 
+# The generated header asserts Julia's own `sizeof`, and that is not the same on
+# every target: i686 aligns Float64 to 4, x86_64 to 8, so JlGainPars is 12 bytes
+# on one and 16 on the other. Mirror the struct instead of hardcoding either.
+struct JlGainParsLayout
+    gain::Float64
+    bypass::Bool
+end
+
 # The reference recursion, written the way fx_eq.c writes it so the only
 # difference is the host's float32 sample storage.
 function rbj_peaking(x, fs, f0, q, gain_db)
@@ -163,7 +171,7 @@ end
     probe = joinpath(dir, "probe_step")
     let cc = AP._c_compiler(), host = clap_src_path(), src = joinpath(FIX, "probe_step.c")
         dl = Sys.islinux() ? ["-ldl"] : String[]
-        run(`$cc -O2 -Wall -Wextra -o $probe $src $host $dl -lm`)
+        run(`$cc $(AP._c_arch_flags()) -O2 -Wall -Wextra -o $probe $src $host $dl -lm`)
     end
     function probe_run(bundle, x, block; sr = 48000, params = ())
         args = [bundle, string(sr), string(block), string(length(x) ÷ block)]
@@ -424,7 +432,7 @@ end
         h = AP.julia_step_header(jl_gain_spec)
         @test h.pars == "JlGainPars"
         @test occursin("struct JlGainPars {\n    double gain;\n    bool bypass;\n};", h.header)
-        @test occursin("_Static_assert(sizeof(JlGainPars) == 16,", h.header)
+        @test occursin("_Static_assert(sizeof(JlGainPars) == $(sizeof(JlGainParsLayout)),", h.header)
         @test occursin("_Static_assert(offsetof(JlGainPars, bypass) == 8,", h.header)
         @test occursin("typedef JlGainMem jl_gain_mem;", h.header)
         @test occursin("typedef JlGainOut jl_gain_out;", h.header)
@@ -519,7 +527,7 @@ end
                 probe_two = joinpath(dir, "probe_two")
                 let cc = AP._c_compiler(), src = joinpath(FIX, "probe_two.c")
                     dl = Sys.islinux() ? ["-ldl"] : String[]
-                    run(`$cc -O2 -Wall -Wextra -I$(AP.VENDOR_DIR) -o $probe_two $src $dl -lm`)
+                    run(`$cc $(AP._c_arch_flags()) -O2 -Wall -Wextra -I$(AP.VENDOR_DIR) -o $probe_two $src $dl -lm`)
                 end
                 function shipped(spec, sub, privatize)
                     s = PluginSpec(; id = spec.id, name = spec.name, base = spec.base,

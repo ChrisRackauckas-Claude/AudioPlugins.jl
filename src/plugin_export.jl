@@ -932,7 +932,7 @@ function export_plugin(spec::PluginSpec, out::AbstractString; format::PluginForm
         strict = ["-std=gnu99", "-Wall", "-Wextra", "-Werror"]
         # Windows code is position independent already, and MinGW warns about -fPIC.
         pic = Sys.iswindows() ? String[] : ["-fPIC"]
-        common = ["-O2", pic..., "-fvisibility=hidden", incs..., pc.cflags...]
+        common = [_c_arch_flags()..., "-O2", pic..., "-fvisibility=hidden", incs..., pc.cflags...]
         for (i, src) in enumerate(wrapper.sources)
             obj = joinpath(dir, "wrapper_$i.o")
             _run(`$cc $strict $common -c $src -o $obj`, verbose)
@@ -943,7 +943,7 @@ function export_plugin(spec::PluginSpec, out::AbstractString; format::PluginForm
         push!(objects, model)
         library = joinpath(dir, "plugin." * Base.BinaryPlatforms.platform_dlext())
         undefined = Sys.isapple() ? String[] : ["-Wl,--no-undefined"]
-        _run(`$cc -shared $pic -o $library $objects $(pc.libs) $undefined`, verbose)
+        _run(`$cc $(_c_arch_flags()) -shared $pic -o $library $objects $(pc.libs) $undefined`, verbose)
         place_library(format, spec, library, out)
     end
     return out
