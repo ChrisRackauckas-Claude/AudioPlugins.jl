@@ -16,7 +16,7 @@ const FIX_STATE = joinpath(@__DIR__, "export")
     probe = joinpath(dir, "probe_state")
     let cc = AP._c_compiler(), src = joinpath(FIX_STATE, "probe_state.c")
         dl = Sys.islinux() ? ["-ldl"] : String[]
-        run(`$cc -O2 -Wall -Wextra -I$(AP.VENDOR_DIR) -o $probe $src $dl`)
+        run(`$cc $(AP._c_arch_flags()) -O2 -Wall -Wextra -I$(AP.VENDOR_DIR) -o $probe $src $dl`)
     end
     function round_trip(bundle, id, value)
         out = read(`$probe $bundle $id $value`, String)
