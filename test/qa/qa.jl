@@ -40,8 +40,4 @@ run_qa(
         ),
         all_explicit_imports_are_public = (; ignore = AUDIOPLUGINS_INTERNALS),
     ),
-    # The manual is being added separately (SciML/AudioPlugins.jl has no `docs/`
-    # yet), so there is nowhere for a `@docs` block to live. Drop this once it
-    # exists; the docstring half of the check is on and must stay green.
-    api_docs_kwargs = (; rendered = false),
 )

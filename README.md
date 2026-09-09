@@ -1,5 +1,16 @@
 # AudioPlugins.jl
 
+[![Join the chat at https://julialang.zulipchat.com #sciml-bridged](https://img.shields.io/static/v1?label=Zulip&message=chat&color=9558b2&labelColor=389826)](https://julialang.zulipchat.com/#narrow/stream/279055-sciml-bridged)
+[![Global Docs](https://img.shields.io/badge/docs-SciML-blue.svg)](https://docs.sciml.ai/AudioPlugins/stable/)
+[![Stable](https://img.shields.io/badge/docs-stable-blue.svg)](https://docs.sciml.ai/AudioPlugins/stable/)
+[![Dev](https://img.shields.io/badge/docs-dev-blue.svg)](https://docs.sciml.ai/AudioPlugins/dev/)
+
+[![codecov](https://codecov.io/gh/SciML/AudioPlugins.jl/branch/main/graph/badge.svg)](https://codecov.io/gh/SciML/AudioPlugins.jl)
+[![Tests](https://github.com/SciML/AudioPlugins.jl/actions/workflows/Tests.yml/badge.svg?branch=main)](https://github.com/SciML/AudioPlugins.jl/actions/workflows/Tests.yml)
+
+[![ColPrac: Contributor's Guide on Collaborative Practices for Community Packages](https://img.shields.io/badge/ColPrac-Contributor%27s%20Guide-blueviolet)](https://github.com/SciML/ColPrac)
+[![SciML Code Style](https://img.shields.io/static/v1?label=code%20style&message=SciML&color=9558b2&labelColor=389826)](https://github.com/SciML/SciMLStyle)
+
 Headless hosting of third-party audio plugins from Julia, behind a C ABI of scalar doubles —
 and, in the other direction, authoring plugins from a per-sample C step function.
 
