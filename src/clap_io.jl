@@ -334,7 +334,7 @@ end
 """
     clap_params() -> Vector{@NamedTuple{id, name, min, max, default}}
 
-The open plugin's automatable parameters. The `id`s are what a model passes to
+Every parameter the open plugin reports. The `id`s are what a model passes to
 `ClapEffect`'s slots, which is why they are numbers: a `clap_id` is a `uint32`
 and every `uint32` is exactly representable as a `Float64`, so a model can name
 its own parameters with nothing to keep in sync driver-side.
