@@ -20,8 +20,8 @@ using Pkg
 Pkg.add("AudioPlugins")
 ```
 
-Hosting needs no C toolchain: the host libraries are shipped prebuilt as `CLAPHost_jll`
-and `VST3Host_jll`.
+Hosting needs no C toolchain: the host libraries are shipped prebuilt as `CLAPHost_jll`,
+`LV2Host_jll` and `VST3Host_jll`.
 A compiler is needed only to build the bundled test plugins ([`clap_test_bundle`](@ref))
 and to author your own ([`export_plugin`](@ref)).
 
@@ -30,7 +30,7 @@ and to author your own ([`export_plugin`](@ref)).
 | Format | Licence | State |
 |---|---|---|
 | **CLAP** | MIT, header-only | host implemented and tested — discovery, instantiation, parameters, block processing, latency. The one format [`export_plugin`](@ref) builds. |
-| **LV2** | ISC | host implemented in C, discovery included — see [LV2 discovery goes through lilv](@ref) |
+| **LV2** | ISC | host implemented and tested — discovery through lilv, instantiation, parameters, block processing, latency. See [LV2 discovery goes through lilv](@ref) |
 | **VST3** | MIT since SDK 3.8 | host implemented and tested — discovery, instantiation, parameters, block processing, latency. See [VST3](@ref) |
 
 ## The processing contract
