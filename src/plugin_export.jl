@@ -12,7 +12,7 @@
 # library by juliac (`JuliaStep`), and the test suite proves the seam with
 # hand-written fixtures of both kinds and no code generator in the loop.
 
-using TOML
+using TOML: TOML
 
 export PluginFormat, CLAP, PluginParam, StepInput, StepSource, CStep, JuliaStep, PluginSpec,
     read_plugin_spec, export_plugin, register_plugin_format!, plugin_format
@@ -52,7 +52,21 @@ The CLAP plugin format (MIT, header-only; the headers are vendored under
 """
 struct CLAP <: PluginFormat end
 
+"""
+    format_name(fmt::PluginFormat) -> String
+
+Key `fmt` is registered under, so that `plugin_format(format_name(fmt))`
+returns it again. Part of the [`PluginFormat`](@ref) interface.
+"""
 format_name(::CLAP) = "clap"
+
+"""
+    bundle_extension(fmt::PluginFormat) -> String
+
+Filename extension a bundle of format `fmt` must carry, e.g. `".clap"`.
+[`export_plugin`](@ref) rejects an output path that does not end in it. Part of
+the [`PluginFormat`](@ref) interface.
+"""
 bundle_extension(::CLAP) = ".clap"
 
 const PLUGIN_FORMATS = Dict{String, PluginFormat}()

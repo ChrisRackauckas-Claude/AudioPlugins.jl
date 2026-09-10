@@ -99,10 +99,43 @@ clap_src_path() = CLAP_SRC
 # csrc/clap_host.h. Integers rather than strings because they are arguments to a
 # clocked equation: a test source is described entirely by its own parameters,
 # with nothing to keep in sync driver-side.
+
+"""
+    CLAP_WAVE_SILENCE
+
+Waveform code for `clp_in_tone`: a constant zero signal.
+"""
 const CLAP_WAVE_SILENCE = 0
+
+"""
+    CLAP_WAVE_SINE
+
+Waveform code for `clp_in_tone`: a sine at the requested frequency and amplitude.
+"""
 const CLAP_WAVE_SINE = 1
+
+"""
+    CLAP_WAVE_SQUARE
+
+Waveform code for `clp_in_tone`: a square wave alternating between `+amplitude`
+and `-amplitude`.
+"""
 const CLAP_WAVE_SQUARE = 2
+
+"""
+    CLAP_WAVE_RAMP
+
+Waveform code for `clp_in_tone`: a sawtooth rising from `-amplitude` to
+`+amplitude` once per period.
+"""
 const CLAP_WAVE_RAMP = 3
+
+"""
+    CLAP_WAVE_IMPULSE
+
+Waveform code for `clp_in_tone`: a single non-zero sample per period, zero
+elsewhere.
+"""
 const CLAP_WAVE_IMPULSE = 4
 
 "Path of a C compiler to build the test plugins with, or `nothing`."
@@ -218,12 +251,59 @@ function clap_close!()
     return nothing
 end
 
+"""
+    clap_last_error() -> String
+
+Why the last host call failed. Every failing entry point here reports through
+this one string, because the C ABI the host presents returns only scalars.
+"""
 clap_last_error() = unsafe_string(ccall((:clap_host_last_error, CLAP_LIB), Cstring, ()))
+
+"""
+    clap_plugin_name() -> String
+
+Name the open plugin reports for itself, or an empty string when nothing is open.
+"""
 clap_plugin_name() = unsafe_string(ccall((:clap_host_plugin_name, CLAP_LIB), Cstring, ()))
+
+"""
+    clap_is_open() -> Bool
+
+Whether a plugin is currently open. A failed [`clap_open!`](@ref) leaves this
+`false`: there is no half-open state.
+"""
 clap_is_open() = ccall((:clap_host_is_open, CLAP_LIB), Cdouble, ()) > 0.5
+
+"""
+    clap_block_size() -> Int
+
+Block size the open plugin was activated with, in frames. Fixed at
+[`clap_open!`](@ref) and unchanged until the next open.
+"""
 clap_block_size() = Int(ccall((:clap_host_block_size, CLAP_LIB), Cdouble, ()))
+
+"""
+    clap_sample_rate() -> Float64
+
+Sample rate the open plugin was activated with, in Hz.
+"""
 clap_sample_rate() = ccall((:clap_host_sample_rate, CLAP_LIB), Cdouble, ())
+
+"""
+    clap_n_process() -> Int
+
+How many `process()` calls the host has made since the last
+[`clap_reset_counters!`](@ref). One block in must be exactly one call, so this
+is what proves the host is not re-processing or coalescing blocks.
+"""
 clap_n_process() = ccall((:clap_host_n_process, CLAP_LIB), Clong, ())
+
+"""
+    clap_param_count() -> Int
+
+Number of automatable parameters the open plugin exposes; the length of
+[`clap_params`](@ref).
+"""
 clap_param_count() = ccall((:clap_host_n_params, CLAP_LIB), Clong, ())
 
 """
@@ -235,6 +315,12 @@ input, and a model that cares must align downstream itself.
 """
 clap_latency() = ccall((:clap_host_latency, CLAP_LIB), Cdouble, ())
 
+"""
+    clap_reset_counters!()
+
+Zero the host's call counters, so a following [`clap_n_process`](@ref) counts
+only what happens after this point.
+"""
 function clap_reset_counters!()
     ccall((:clap_host_reset_counters, CLAP_LIB), Cvoid, ())
     return nothing

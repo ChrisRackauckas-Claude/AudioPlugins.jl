@@ -1,0 +1,26 @@
+name: "Tests"
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths-ignore:
+      - 'docs/**'
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - 'docs/**'
+  schedule:
+    - cron: '59 12 * * 2'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref_name != github.event.repository.default_branch || github.ref != 'refs/tags/v*' }}
+
+jobs:
+  tests:
+    uses: "SciML/.github/.github/workflows/grouped-tests.yml@v1"
+    with:
+      coverage-directories: "src,ext"
+    secrets: "inherit"

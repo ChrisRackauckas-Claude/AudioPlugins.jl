@@ -1,8 +1,9 @@
 module AudioPluginsJuliaCExt
 
-using AudioPlugins, JuliaC
-using AudioPlugins: PluginFormat, PluginSpec, JuliaStep, julia_step_header, emit_wrapper,
-    place_library, runtime_layout, _with_pars, _resolve_compiler, _run, VENDOR_DIR
+using AudioPlugins: AudioPlugins, PluginFormat, PluginSpec, JuliaStep, julia_step_header,
+    emit_wrapper, place_library, runtime_layout, _with_pars, _resolve_compiler,
+    _run, VENDOR_DIR
+using JuliaC: JuliaC
 
 const FORWARD_SHIM = normpath(joinpath(VENDOR_DIR, "..", "clap_forward_shim.c"))
 

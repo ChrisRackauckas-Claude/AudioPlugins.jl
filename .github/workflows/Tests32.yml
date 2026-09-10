@@ -1,0 +1,36 @@
+name: "Tests (32-bit)"
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths-ignore:
+      - 'docs/**'
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - 'docs/**'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  # A lane of its own rather than a group in test/test_groups.toml. The suite
+  # compiles its plugins with `cc -m32`, which needs gcc-multilib and the 32-bit
+  # headers, and grouped-tests.yml's `apt-packages` input is workflow-wide:
+  # setting it there pins *every* leg to ubuntu-24.04 and so would drop the macOS
+  # and Windows lanes. tests.yml installs the i386 runtime by itself whenever
+  # julia-arch is x86, so only the cross-compilation toolchain is asked for here.
+  x86:
+    name: "32-bit"
+    uses: "SciML/.github/.github/workflows/tests.yml@v1"
+    with:
+      project: "."
+      group: "All"
+      julia-version: "1"
+      julia-arch: "x86"
+      apt-packages: "gcc-multilib libc6-dev-i386"
+      coverage-directories: "src,ext"
+    secrets: "inherit"

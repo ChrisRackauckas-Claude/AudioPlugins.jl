@@ -1,0 +1,33 @@
+# The CI matrix and the test groups, in one place: `.github/workflows/Tests.yml`
+# expands this and `test/runtests.jl` dispatches on the GROUP it sets.
+#
+# Every group carries the full OS axis because what this package does is
+# platform-specific: the host is a prebuilt JLL that has no Windows build, the
+# exporter shells out to the platform C compiler, and a Julia step bundles its
+# runtime differently on Windows than elsewhere.
+
+# The CLAP host itself, hosting the test bundle in this process.
+[Core]
+versions = ["lts", "1"]
+os = ["ubuntu-latest", "macos-latest", "windows-latest"]
+
+# Authoring: build plugins from the C and Julia step fixtures, then host them.
+[Export]
+versions = ["lts", "1"]
+os = ["ubuntu-latest", "macos-latest", "windows-latest"]
+
+# clap.state save/load, driven through the C probe rather than the Julia host.
+[State]
+versions = ["lts", "1"]
+os = ["ubuntu-latest", "macos-latest", "windows-latest"]
+
+# Aqua / ExplicitImports / public-API docs. Centrally clamped to julia "1".
+[QA]
+versions = ["1"]
+
+# The 32-bit (x86) lane is NOT declared here. It needs `gcc-multilib` and
+# `libc6-dev-i386` so that `cc -m32` can build the test plugins, and
+# grouped-tests.yml's `apt-packages` input is workflow-wide: setting it pins
+# *every* leg to ubuntu-24.04, which would drop the macOS and Windows lanes
+# above. The lane therefore calls the reusable tests.yml directly from
+# .github/workflows/Tests32.yml instead.

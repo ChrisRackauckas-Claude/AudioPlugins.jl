@@ -1,0 +1,14 @@
+# The vendored CLAP and LV2 headers are third-party sources kept verbatim, so
+# their spelling is not ours to correct.
+[files]
+extend-exclude = ["csrc/vendor/"]
+
+[default.extend-words]
+# The RDF store lilv is built on, alongside serd and sratom.
+sord = "sord"
+# From "mis-maps".
+mis = "mis"
+
+[default.extend-identifiers]
+# ProcessContext::continousTimeSamples is spelled that way by the VST3 SDK.
+continousTimeSamples = "continousTimeSamples"
