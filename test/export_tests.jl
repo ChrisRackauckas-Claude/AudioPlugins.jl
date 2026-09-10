@@ -173,9 +173,9 @@ end
     eq_tol = 1.0e-6
 
     # A C process over csrc/clap_host.c hosts what this package built. It
-    # needs no CLAPHost_jll, so it runs where the JLL has no build (Windows,
-    # until Yggdrasil ships one), and no Julia, so it can load a juliac
-    # plugin, which brings a libjulia this process already has.
+    # needs no CLAPHost_jll, so it runs where the JLL has no build, and no
+    # Julia, so it can load a juliac plugin, which brings a libjulia this
+    # process already has.
     probe = joinpath(dir, "probe_step")
     let cc = AP._c_compiler(), host = clap_src_path(), src = joinpath(FIX, "probe_step.c")
         dl = Sys.islinux() ? ["-ldl"] : String[]

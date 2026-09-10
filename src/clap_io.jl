@@ -78,11 +78,11 @@ end
 """
     clap_host_available() -> Bool
 
-Whether `CLAPHost_jll` ships the prebuilt host for this platform. Where it
-does not (Windows, until https://github.com/JuliaPackaging/Yggdrasil/pull/14685
-lands), the module loads and [`export_plugin`](@ref) works, but the
-`clap_*` hosting functions cannot load the host: host from a C program
-over `csrc/clap_host.c` instead, as `test/export/probe_step.c` does.
+Whether `CLAPHost_jll` ships the prebuilt host for this platform. It does
+for Linux, macOS and Windows since 1.0.1. Where it does not, the module
+loads and [`export_plugin`](@ref) works, but the `clap_*` hosting
+functions cannot load the host: host from a C program over
+`csrc/clap_host.c` instead, as `test/export/probe_step.c` does.
 """
 clap_host_available() = CLAP_HOST_AVAILABLE
 

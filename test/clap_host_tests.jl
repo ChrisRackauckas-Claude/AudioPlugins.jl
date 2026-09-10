@@ -18,7 +18,7 @@ sha_free(x) = x  # (no fixtures to checksum: the plugin is built from source her
 
 if !clap_host_available()
     @testset "AudioPlugins / CLAP: no prebuilt host on this platform" begin
-        # Windows, until CLAPHost_jll ships a build. Hosting is covered by
+        # A platform CLAPHost_jll has no build for. Hosting is covered by
         # the C probes in test/export, which compile csrc/clap_host.c.
         @test isfile(clap_src_path())
         @test_throws ErrorException clap_lib_path()

@@ -28,10 +28,10 @@ standalone C program links `clap_host.c` directly, with no Julia present.
 the source it was built from; `CLAPHost_jll`'s version tracks the release of this
 package whose `csrc/` it was built from.
 
-The JLL has no Windows build yet
-([Yggdrasil #14685](https://github.com/JuliaPackaging/Yggdrasil/pull/14685) adds one);
-there the package still loads and authors plugins, `clap_host_available()` is `false`, and
-hosting is done from C over `csrc/clap_host.c`, as the test probes do.
+`CLAPHost_jll` 1.0.1 builds for Linux, macOS and Windows, so in-process hosting runs on
+all three. Where a platform has no build, the package still loads and authors plugins,
+`clap_host_available()` is `false`, and hosting is done from C over `csrc/clap_host.c`,
+as the test probes do.
 
 The only things that need a C compiler are building the *test* plugins
 (`clap_test_bundle()`), which go into a per-package scratch space, and authoring
