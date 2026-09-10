@@ -38,9 +38,11 @@ const FIX_STATE = joinpath(@__DIR__, "export")
         if Sys.iswindows()
             # A Julia step ships its runtime on Windows; the .clap is a shim
             # over it, and probe_state's LoadLibraryA goes through the shim.
-            jl_spec = PluginSpec(; id = jl_spec.id, name = jl_spec.name, base = jl_spec.base,
-                                 inputs = jl_spec.inputs, params = jl_spec.params,
-                                 step = JuliaStep(; file = jl_spec.step.file, bundle = true))
+            jl_spec = PluginSpec(;
+                id = jl_spec.id, name = jl_spec.name, base = jl_spec.base,
+                inputs = jl_spec.inputs, params = jl_spec.params,
+                step = JuliaStep(; file = jl_spec.step.file, bundle = true)
+            )
         end
         push!(bundles, "Julia" => export_plugin(jl_spec, joinpath(dir, "jl_gain.clap")))
     end

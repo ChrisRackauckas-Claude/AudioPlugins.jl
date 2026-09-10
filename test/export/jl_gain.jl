@@ -13,8 +13,10 @@ struct JlGainOut
     y::Float64
 end
 
-Base.@ccallable function jl_gain_step(u::Float64, clock1::Bool, pars::Ptr{JlGainPars},
-                                      self::Ptr{JlGainMem})::JlGainOut
+Base.@ccallable function jl_gain_step(
+        u::Float64, clock1::Bool, pars::Ptr{JlGainPars},
+        self::Ptr{JlGainMem}
+    )::JlGainOut
     p = unsafe_load(pars)
     if clock1
         unsafe_store!(self, JlGainMem(unsafe_load(self).ticks + 1))

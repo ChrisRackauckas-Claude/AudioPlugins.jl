@@ -15,7 +15,7 @@
 using TOML
 
 export PluginFormat, CLAP, PluginParam, StepInput, StepSource, CStep, JuliaStep, PluginSpec,
-       read_plugin_spec, export_plugin, register_plugin_format!, plugin_format
+    read_plugin_spec, export_plugin, register_plugin_format!, plugin_format
 
 # ---------------------------------------------------------------------------
 # Formats
@@ -75,8 +75,12 @@ The registered format called `name` (`"clap"` ships with the package).
 """
 function plugin_format(name::AbstractString)
     haskey(PLUGIN_FORMATS, name) && return PLUGIN_FORMATS[name]
-    throw(ArgumentError("no plugin format registered as $(repr(name)); " *
-                        "known: $(join(sort!(collect(keys(PLUGIN_FORMATS))), ", "))"))
+    throw(
+        ArgumentError(
+            "no plugin format registered as $(repr(name)); " *
+                "known: $(join(sort!(collect(keys(PLUGIN_FORMATS))), ", "))"
+        )
+    )
 end
 
 # ---------------------------------------------------------------------------
@@ -105,21 +109,29 @@ struct PluginParam
     automatable::Bool
     stepped::Bool
     ctype::String
-    function PluginParam(; id, name, field, min, max, default,
-                         automatable::Bool = true, stepped::Bool = false,
-                         ctype::AbstractString = "double")
+    function PluginParam(;
+            id, name, field, min, max, default,
+            automatable::Bool = true, stepped::Bool = false,
+            ctype::AbstractString = "double"
+        )
         _check_c_ident(field, "parameter field")
         ctype in PARAM_CTYPES ||
-            throw(ArgumentError("parameter $(repr(name)): ctype must be one of " *
-                                "$(join(PARAM_CTYPES, ", ")), got $(repr(ctype))"))
+            throw(
+            ArgumentError(
+                "parameter $(repr(name)): ctype must be one of " *
+                    "$(join(PARAM_CTYPES, ", ")), got $(repr(ctype))"
+            )
+        )
         all(isfinite, (min, max, default)) ||
             throw(ArgumentError("parameter $(repr(name)): min, max and default must be finite"))
         min <= max ||
             throw(ArgumentError("parameter $(repr(name)): min $min exceeds max $max"))
         min <= default <= max ||
             throw(ArgumentError("parameter $(repr(name)): default $default is outside [$min, $max]"))
-        return new(UInt32(id), String(name), String(field), Float64(min), Float64(max),
-                   Float64(default), automatable, stepped, String(ctype))
+        return new(
+            UInt32(id), String(name), String(field), Float64(min), Float64(max),
+            Float64(default), automatable, stepped, String(ctype)
+        )
     end
 end
 
@@ -169,9 +181,11 @@ struct CStep <: StepSource
             path === nothing && continue
             isfile(path) || throw(ArgumentError("$label $(repr(path)) is not a file"))
         end
-        return new(abspath(source), abspath(header),
-                   pkgconfig === nothing ? nothing : abspath(pkgconfig),
-                   String[abspath(d) for d in include_dirs])
+        return new(
+            abspath(source), abspath(header),
+            pkgconfig === nothing ? nothing : abspath(pkgconfig),
+            String[abspath(d) for d in include_dirs]
+        )
     end
 end
 
@@ -227,8 +241,10 @@ struct JuliaStep <: StepSource
     trim::String
     bundle::Bool
     privatize::Union{Bool, String}
-    function JuliaStep(; file, project = "", trim = "safe", bundle::Bool = false,
-                       privatize::Union{Bool, AbstractString} = false)
+    function JuliaStep(;
+            file, project = "", trim = "safe", bundle::Bool = false,
+            privatize::Union{Bool, AbstractString} = false
+        )
         isfile(file) || throw(ArgumentError("file $(repr(file)) is not a file"))
         privatize == false || bundle ||
             throw(ArgumentError("privatize needs bundle = true: only a bundled runtime can be salted"))
@@ -238,8 +254,10 @@ struct JuliaStep <: StepSource
             throw(ArgumentError("project $(repr(project)) does not exist"))
         trim in ("safe", "unsafe", "unsafe-warn", "no") ||
             throw(ArgumentError("trim must be safe, unsafe, unsafe-warn or no, got $(repr(trim))"))
-        return new(abspath(file), project == "" ? "" : abspath(project), String(trim), bundle,
-                   privatize isa AbstractString ? String(privatize) : privatize)
+        return new(
+            abspath(file), project == "" ? "" : abspath(project), String(trim), bundle,
+            privatize isa AbstractString ? String(privatize) : privatize
+        )
     end
 end
 
@@ -299,14 +317,16 @@ struct PluginSpec
     step::StepSource
 end
 
-function PluginSpec(; id, name, base, step = nothing, pars = "",
-                    source = nothing, header = nothing, pkgconfig = nothing,
-                    include_dirs = String[],
-                    vendor = "", version = "0.0.0", description = "", url = "",
-                    features = ["audio-effect"], channels::Integer = 2,
-                    inputs = [StepInput("u", :audio)], output = "y", sub_clock::Bool = false,
-                    sample_rate_field = nothing, params = PluginParam[],
-                    constants = Pair{String, Any}[])
+function PluginSpec(;
+        id, name, base, step = nothing, pars = "",
+        source = nothing, header = nothing, pkgconfig = nothing,
+        include_dirs = String[],
+        vendor = "", version = "0.0.0", description = "", url = "",
+        features = ["audio-effect"], channels::Integer = 2,
+        inputs = [StepInput("u", :audio)], output = "y", sub_clock::Bool = false,
+        sample_rate_field = nothing, params = PluginParam[],
+        constants = Pair{String, Any}[]
+    )
     isempty(id) && throw(ArgumentError("plugin id must not be empty"))
     isempty(name) && throw(ArgumentError("plugin name must not be empty"))
     1 <= channels <= 64 || throw(ArgumentError("channels must be in 1..64, got $channels"))
@@ -338,18 +358,22 @@ function PluginSpec(; id, name, base, step = nothing, pars = "",
         v isa Union{Bool, Integer, AbstractFloat} ||
             throw(ArgumentError("constant $k must be a Bool, Integer or Float, got $(typeof(v))"))
     end
-    return PluginSpec(String(id), String(name), String(vendor), String(version),
-                      String(description), String(url), String[features...], Int(channels),
-                      String(base), String(pars), inputs, String(output), sub_clock,
-                      sample_rate_field === nothing ? nothing : String(sample_rate_field),
-                      params, consts, step)
+    return PluginSpec(
+        String(id), String(name), String(vendor), String(version),
+        String(description), String(url), String[features...], Int(channels),
+        String(base), String(pars), inputs, String(output), sub_clock,
+        sample_rate_field === nothing ? nothing : String(sample_rate_field),
+        params, consts, step
+    )
 end
 
 "The same spec with the parameter struct named `pars`."
 _with_pars(s::PluginSpec, pars::AbstractString) =
-    PluginSpec(s.id, s.name, s.vendor, s.version, s.description, s.url, s.features, s.channels,
-               s.base, String(pars), s.inputs, s.output, s.sub_clock, s.sample_rate_field,
-               s.params, s.constants, s.step)
+    PluginSpec(
+    s.id, s.name, s.vendor, s.version, s.description, s.url, s.features, s.channels,
+    s.base, String(pars), s.inputs, s.output, s.sub_clock, s.sample_rate_field,
+    s.params, s.constants, s.step
+)
 
 function _check_c_ident(s, what)
     occursin(r"^[A-Za-z_][A-Za-z0-9_]*$", s) ||
@@ -422,25 +446,33 @@ function read_plugin_spec(path::AbstractString)
     build = _section(d, "build", path)
     resolve(p) = p === nothing ? nothing : normpath(joinpath(dir, p))
     inputs = [StepInput(i["name"], Symbol(i["role"])) for i in get(abi, "inputs", Any[])]
-    params = [PluginParam(; id = p["id"], name = p["name"], field = p["field"],
-                          min = p["min"], max = p["max"], default = p["default"],
-                          automatable = get(p, "automatable", true),
-                          stepped = get(p, "stepped", false),
-                          ctype = get(p, "ctype", "double"))
-              for p in get(d, "param", Any[])]
+    params = [
+        PluginParam(;
+            id = p["id"], name = p["name"], field = p["field"],
+            min = p["min"], max = p["max"], default = p["default"],
+            automatable = get(p, "automatable", true),
+            stepped = get(p, "stepped", false),
+            ctype = get(p, "ctype", "double")
+        )
+            for p in get(d, "param", Any[])
+    ]
     step = if haskey(build, "julia")
         haskey(build, "source") &&
             throw(ArgumentError("$path: [build] names both `julia` and `source`"))
-        JuliaStep(; file = resolve(build["julia"]),
-                  project = something(resolve(get(build, "project", nothing)), ""),
-                  trim = get(build, "trim", "safe"), bundle = get(build, "bundle", false),
-                  privatize = get(build, "privatize", false))
+        JuliaStep(;
+            file = resolve(build["julia"]),
+            project = something(resolve(get(build, "project", nothing)), ""),
+            trim = get(build, "trim", "safe"), bundle = get(build, "bundle", false),
+            privatize = get(build, "privatize", false)
+        )
     else
         haskey(build, "source") && haskey(build, "header") ||
             throw(ArgumentError("$path: [build] needs `source` and `header`, or `julia`"))
-        CStep(; source = resolve(build["source"]), header = resolve(build["header"]),
-              pkgconfig = resolve(get(build, "pkgconfig", nothing)),
-              include_dirs = [resolve(i) for i in get(build, "include_dirs", String[])])
+        CStep(;
+            source = resolve(build["source"]), header = resolve(build["header"]),
+            pkgconfig = resolve(get(build, "pkgconfig", nothing)),
+            include_dirs = [resolve(i) for i in get(build, "include_dirs", String[])]
+        )
     end
     return PluginSpec(;
         id = plugin["id"], name = plugin["name"],
@@ -452,7 +484,8 @@ function read_plugin_spec(path::AbstractString)
         inputs = isempty(inputs) ? [StepInput("u", :audio)] : inputs,
         output = get(abi, "output", "y"), sub_clock = get(abi, "sub_clock", false),
         sample_rate_field = get(abi, "sample_rate_field", nothing),
-        params, constants = collect(get(d, "constants", Dict{String, Any}())))
+        params, constants = collect(get(d, "constants", Dict{String, Any}()))
+    )
 end
 
 function _section(d, key, path)
@@ -487,8 +520,10 @@ function pkgconfig_flags(path::AbstractString)
             fields[name] = _expand_pc(value, vars)
         end
     end
-    libs = vcat(Base.shell_split(get(fields, "Libs", "")),
-                Base.shell_split(get(fields, "Libs.private", "")))
+    libs = vcat(
+        Base.shell_split(get(fields, "Libs", "")),
+        Base.shell_split(get(fields, "Libs.private", ""))
+    )
     return (; cflags = Base.shell_split(get(fields, "Cflags", "")), libs)
 end
 
@@ -501,7 +536,8 @@ _expand_pc(s, vars) = replace(s, r"\$\{([A-Za-z0-9_.]+)\}" => m -> get(vars, m[3
 const C_SCALARS = Dict{DataType, String}(
     Float64 => "double", Float32 => "float", Bool => "bool",
     Int8 => "int8_t", Int16 => "int16_t", Int32 => "int32_t", Int64 => "int64_t",
-    UInt8 => "uint8_t", UInt16 => "uint16_t", UInt32 => "uint32_t", UInt64 => "uint64_t")
+    UInt8 => "uint8_t", UInt16 => "uint16_t", UInt32 => "uint32_t", UInt64 => "uint64_t"
+)
 
 """
     julia_step_header(spec::PluginSpec) -> (; pars::String, header::String)
@@ -525,9 +561,13 @@ function julia_step_header(spec::PluginSpec)
     rt, params = _ccallable_signature(mod, stepname, step.file)
     n = length(spec.inputs)
     length(params) == n + 2 ||
-        throw(ArgumentError("$stepname must take the $n descriptor input(s), a Ptr to the parameter " *
-                            "struct and a Ptr to the state struct; its @ccallable signature has " *
-                            "$(length(params)) arguments"))
+        throw(
+        ArgumentError(
+            "$stepname must take the $n descriptor input(s), a Ptr to the parameter " *
+                "struct and a Ptr to the state struct; its @ccallable signature has " *
+                "$(length(params)) arguments"
+        )
+    )
     for (inp, T) in zip(spec.inputs, params)
         want = inp.role === :audio ? Float64 : Bool
         T === want || throw(ArgumentError("$stepname: input $(inp.name) must be $want, got $T"))
@@ -548,8 +588,12 @@ function julia_step_header(spec::PluginSpec)
     end
     rrt, rparams = _ccallable_signature(mod, resetname, step.file)
     (rrt === Nothing || rrt === Cvoid) && rparams == [Ptr{M}] ||
-        throw(ArgumentError("$resetname must be declared as ($resetname(self::Ptr{$M})::Cvoid), " *
-                            "got return $rrt over $(Tuple(rparams))"))
+        throw(
+        ArgumentError(
+            "$resetname must be declared as ($resetname(self::Ptr{$M})::Cvoid), " *
+                "got return $rrt over $(Tuple(rparams))"
+        )
+    )
     isempty(spec.pars) || spec.pars == String(nameof(P)) ||
         throw(ArgumentError("the descriptor names the parameter struct $(spec.pars) but $stepname takes Ptr{$P}"))
     for p in spec.params
@@ -574,8 +618,12 @@ function _step_module(file::AbstractString)
             Base.include(mod, file)
         catch e
             if e isa LoadError && occursin("@ccallable was already defined", sprint(showerror, e.error))
-                throw(ArgumentError("$file changed since it was last loaded, and on Julia $VERSION " *
-                                    "a @ccallable name cannot be redefined: restart Julia to export it again"))
+                throw(
+                    ArgumentError(
+                        "$file changed since it was last loaded, and on Julia $VERSION " *
+                            "a @ccallable name cannot be redefined: restart Julia to export it again"
+                    )
+                )
             end
             rethrow()
         end
@@ -603,14 +651,18 @@ function _pointee(T, what)
 end
 
 _plain_struct(T) = T isa DataType && isstructtype(T) && isbitstype(T) && isempty(T.parameters) &&
-                   !(T <: Tuple)
+    !(T <: Tuple)
 
 function _check_struct_field(P, field, ctype, what)
     hasfield(P, Symbol(field)) || throw(ArgumentError("$what: $P has no field $field"))
     got = get(C_SCALARS, fieldtype(P, Symbol(field)), nothing)
     got == ctype ||
-        throw(ArgumentError("$what: field $field of $P is $(fieldtype(P, Symbol(field))), " *
-                            "which is not the descriptor's $ctype"))
+        throw(
+        ArgumentError(
+            "$what: field $field of $P is $(fieldtype(P, Symbol(field))), " *
+                "which is not the descriptor's $ctype"
+        )
+    )
     return nothing
 end
 
@@ -652,8 +704,10 @@ function _emit_c_struct!(io, T::DataType, done::Set{DataType})
     println(io, "};")
     println(io, "_Static_assert(sizeof($name) == $(sizeof(T)), \"$name: size differs from Julia\");")
     for i in 1:fieldcount(T)
-        println(io, "_Static_assert(offsetof($name, $(fieldname(T, i))) == $(fieldoffset(T, i)), ",
-                "\"$name.$(fieldname(T, i)): offset differs from Julia\");")
+        println(
+            io, "_Static_assert(offsetof($name, $(fieldname(T, i))) == $(fieldoffset(T, i)), ",
+            "\"$name.$(fieldname(T, i)): offset differs from Julia\");"
+        )
     end
     println(io)
     push!(done, T)
@@ -683,8 +737,12 @@ function _c_type(F, T, i)
         return E === Cvoid ? "void *" : _c_type(E, T, i) * " *"
     end
     _plain_struct(F) && return String(nameof(F))
-    throw(ArgumentError("field $(fieldname(T, i)) of $T has type $F, which has no C declaration " *
-                        "(use Float64, Float32, Bool, sized integers, Ptr, NTuple or nested isbits structs)"))
+    throw(
+        ArgumentError(
+            "field $(fieldname(T, i)) of $T has type $F, which has no C declaration " *
+                "(use Float64, Float32, Bool, sized integers, Ptr, NTuple or nested isbits structs)"
+        )
+    )
 end
 
 # ---------------------------------------------------------------------------
@@ -748,19 +806,27 @@ function _clap_substitutions(spec::PluginSpec)
     isempty(spec.pars) && throw(ArgumentError("the parameter struct name is not known yet"))
     step_args = join(((i.role === :audio ? "x" : "true") for i in spec.inputs), ", ")
     port_type = spec.channels == 1 ? "CLAP_PORT_MONO" :
-                spec.channels == 2 ? "CLAP_PORT_STEREO" : "NULL"
-    param_info = join(("{ $(p.id)u, $(_c_string(p.name)), $(_c_double(p.min)), " *
-                       "$(_c_double(p.max)), $(_c_double(p.default)), $(_param_flags(p)) },"
-                       for p in spec.params), "\n    ")
-    param_apply = join(("case $(i - 1): s->pars.$(p.field) = $(_param_cast(p)); break;"
-                        for (i, p) in enumerate(spec.params)), "\n    ")
+        spec.channels == 2 ? "CLAP_PORT_STEREO" : "NULL"
+    param_info = join(
+        (
+            "{ $(p.id)u, $(_c_string(p.name)), $(_c_double(p.min)), " *
+                "$(_c_double(p.max)), $(_c_double(p.default)), $(_param_flags(p)) },"
+                for p in spec.params
+        ), "\n    "
+    )
+    param_apply = join(
+        (
+            "case $(i - 1): s->pars.$(p.field) = $(_param_cast(p)); break;"
+                for (i, p) in enumerate(spec.params)
+        ), "\n    "
+    )
     constants = join(("s->pars.$k = $(_c_literal(v));" for (k, v) in spec.constants), "\n    ")
     on_activate = spec.sample_rate_field === nothing ? "(void)sr;" :
-                  "s->pars.$(spec.sample_rate_field) = sr;"
+        "s->pars.$(spec.sample_rate_field) = sr;"
     output_read = spec.sub_clock ?
-                  "if (o.has_$(spec.output)) s->held[c] = o.$(spec.output);\n" *
-                  "            double y = s->held[c];" :
-                  "double y = o.$(spec.output);"
+        "if (o.has_$(spec.output)) s->held[c] = o.$(spec.output);\n" *
+        "            double y = s->held[c];" :
+        "double y = o.$(spec.output);"
     return Dict(
         "HEADER" => spec.base * ".h",
         "BASE" => spec.base,
@@ -808,8 +874,10 @@ end
 function _resolve_compiler(compiler)
     compiler === nothing || return String(compiler)
     cc = _c_compiler()
-    cc === nothing && error("export_plugin needs a C compiler on PATH (tried cc, gcc, clang), " *
-                            "or one passed as `compiler`. Hosting plugins does not.")
+    cc === nothing && error(
+        "export_plugin needs a C compiler on PATH (tried cc, gcc, clang), " *
+            "or one passed as `compiler`. Hosting plugins does not."
+    )
     return cc
 end
 
@@ -858,8 +926,10 @@ the runtime's DLLs beside it, and `Name.clap` is a small shim
 searches a DLL's own directory for its imports.
 """
 function runtime_layout(::CLAP, out::AbstractString)
-    Sys.isapple() && return (; dir = joinpath(out, "Contents", "Resources", "julia"),
-                             rpath = joinpath("..", "Resources", "julia", "lib"))
+    Sys.isapple() && return (;
+        dir = joinpath(out, "Contents", "Resources", "julia"),
+        rpath = joinpath("..", "Resources", "julia", "lib"),
+    )
     Sys.iswindows() && return (; dir = out * ".runtime", rpath = "")
     return (; dir = out * ".runtime", rpath = joinpath(basename(out) * ".runtime", "lib"))
 end
@@ -909,8 +979,10 @@ that loads it, so `bundle = true` is required there.
 Both need a C compiler: `cc`, `gcc` or `clang` on `PATH`, or
 `compiler = "/path/to/cc"`. Hosting plugins does not.
 """
-function export_plugin(spec::PluginSpec, out::AbstractString; format::PluginFormat = CLAP(),
-                       compiler = nothing, verbose::Bool = false)
+function export_plugin(
+        spec::PluginSpec, out::AbstractString; format::PluginFormat = CLAP(),
+        compiler = nothing, verbose::Bool = false
+    )
     ext = bundle_extension(format)
     endswith(out, ext) ||
         throw(ArgumentError("output $(repr(out)) must end in $ext for format $(format_name(format))"))
@@ -919,7 +991,7 @@ function export_plugin(spec::PluginSpec, out::AbstractString; format::PluginForm
     step = spec.step::CStep
     cc = _resolve_compiler(compiler)
     pc = step.pkgconfig === nothing ? (; cflags = String[], libs = String[]) :
-         pkgconfig_flags(step.pkgconfig)
+        pkgconfig_flags(step.pkgconfig)
     mktempdir() do dir
         wrapper = emit_wrapper(format, spec, dir)
         # -isystem rather than -I for the wrapper: the ABI header is someone
@@ -956,13 +1028,19 @@ Implemented by the `AudioPluginsJuliaCExt` extension, which loads with
 `using JuliaC`.
 """
 function _export_julia_step(format, spec, out; compiler, verbose)
-    error("export_plugin: building a plugin from a JuliaStep needs JuliaC loaded " *
-          "(`using JuliaC`) and Julia ≥ 1.12; this is Julia $VERSION")
+    error(
+        "export_plugin: building a plugin from a JuliaStep needs JuliaC loaded " *
+            "(`using JuliaC`) and Julia ≥ 1.12; this is Julia $VERSION"
+    )
 end
 
 register_plugin_format!(CLAP())
 
 @static if VERSION >= v"1.11"
-    eval(Meta.parse("public format_name, bundle_extension, emit_wrapper, place_library, " *
-                    "runtime_layout, pkgconfig_flags, julia_step_header"))
+    eval(
+        Meta.parse(
+            "public format_name, bundle_extension, emit_wrapper, place_library, " *
+                "runtime_layout, pkgconfig_flags, julia_step_header"
+        )
+    )
 end
