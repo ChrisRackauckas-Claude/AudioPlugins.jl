@@ -95,11 +95,6 @@ vendored CLAP headers it needs are next to it under `csrc/vendor/`.
 """
 clap_src_path() = CLAP_SRC
 
-# Waveform codes for `clp_in_tone`, mirroring the CLAP_WAVE_* macros in
-# csrc/clap_host.h. Integers rather than strings because they are arguments to a
-# clocked equation: a test source is described entirely by its own parameters,
-# with nothing to keep in sync driver-side.
-
 """
     CLAP_WAVE_SILENCE
 
@@ -110,15 +105,21 @@ const CLAP_WAVE_SILENCE = 0
 """
     CLAP_WAVE_SINE
 
-Waveform code for `clp_in_tone`: a sine at the requested frequency and amplitude.
+Waveform code for `amp * sin(2π * freq * t)`.
+
+The `CLAP_WAVE_*` codes are the `waveform` argument of the host's node-side
+tone source, mirroring the `CLAP_WAVE_*` macros in `csrc/clap_host.h`. They are
+integers rather than symbols because they are arguments to a clocked equation:
+a test source is then described entirely by its own parameters, with nothing to
+keep in sync driver-side. A code the host does not know produces silence.
 """
 const CLAP_WAVE_SINE = 1
 
 """
     CLAP_WAVE_SQUARE
 
-Waveform code for `clp_in_tone`: a square wave alternating between `+amplitude`
-and `-amplitude`.
+Waveform code for a square wave: `±amp`, following the sign of the sine of the
+same phase. See [`CLAP_WAVE_SINE`](@ref) for the family.
 """
 const CLAP_WAVE_SQUARE = 2
 
@@ -133,8 +134,9 @@ const CLAP_WAVE_RAMP = 3
 """
     CLAP_WAVE_IMPULSE
 
-Waveform code for `clp_in_tone`: a single non-zero sample per period, zero
-elsewhere.
+Waveform code for a single sample of `amp` at sample index 0 and zero
+afterwards, for measuring an impulse response. See [`CLAP_WAVE_SINE`](@ref) for
+the family.
 """
 const CLAP_WAVE_IMPULSE = 4
 
@@ -254,8 +256,9 @@ end
 """
     clap_last_error() -> String
 
-Why the last host call failed. Every failing entry point here reports through
-this one string, because the C ABI the host presents returns only scalars.
+Human-readable reason for the last host failure, or `""` when there has not
+been one. [`clap_open!`](@ref) and [`clap_scan`](@ref) already fold this into
+the error they throw.
 """
 clap_last_error() = unsafe_string(ccall((:clap_host_last_error, CLAP_LIB), Cstring, ()))
 
@@ -277,8 +280,10 @@ clap_is_open() = ccall((:clap_host_is_open, CLAP_LIB), Cdouble, ()) > 0.5
 """
     clap_block_size() -> Int
 
-Block size the open plugin was activated with, in frames. Fixed at
-[`clap_open!`](@ref) and unchanged until the next open.
+Block size in force, in frames — the `block_size` [`clap_open!`](@ref) was
+called with. The plugin was activated with `min == max == block_size`, so this
+is a fixed contract rather than a maximum, and it is what a caller must feed
+per tick for the stream to stay contiguous.
 """
 clap_block_size() = Int(ccall((:clap_host_block_size, CLAP_LIB), Cdouble, ()))
 
@@ -292,17 +297,17 @@ clap_sample_rate() = ccall((:clap_host_sample_rate, CLAP_LIB), Cdouble, ())
 """
     clap_n_process() -> Int
 
-How many `process()` calls the host has made since the last
-[`clap_reset_counters!`](@ref). One block in must be exactly one call, so this
-is what proves the host is not re-processing or coalescing blocks.
+Number of `process()` calls made since the plugin was opened, or since the last
+[`clap_reset_counters!`](@ref). Exactly one per tick is the property the tests
+assert: a second call would advance the plugin's internal state twice for one
+block of time.
 """
 clap_n_process() = ccall((:clap_host_n_process, CLAP_LIB), Clong, ())
 
 """
     clap_param_count() -> Int
 
-Number of automatable parameters the open plugin exposes; the length of
-[`clap_params`](@ref).
+Number of parameters the open plugin exposes, i.e. `length(clap_params())`.
 """
 clap_param_count() = ccall((:clap_host_n_params, CLAP_LIB), Clong, ())
 
@@ -318,8 +323,8 @@ clap_latency() = ccall((:clap_host_latency, CLAP_LIB), Cdouble, ())
 """
     clap_reset_counters!()
 
-Zero the host's call counters, so a following [`clap_n_process`](@ref) counts
-only what happens after this point.
+Zero the host's call counters, so [`clap_n_process`](@ref) counts from here.
+Does not touch the plugin's own state.
 """
 function clap_reset_counters!()
     ccall((:clap_host_reset_counters, CLAP_LIB), Cvoid, ())
@@ -396,12 +401,43 @@ end
 # depends on, so nothing can be scheduled before the block it reads.
 # ---------------------------------------------------------------------------
 
+"""
+    AudioPlugins.clp_in_tone(t, waveform, freq, amp) -> token
+
+Generate one block of a test waveform ending at source time `t` seconds, fill
+the input block with it on every channel, and return its token. `waveform` is a
+`CLAP_WAVE_*` code (see [`CLAP_WAVE_SINE`](@ref)), `freq` is in Hz and `amp` in
+`[0, 1]`. The alternative to [`clap_fill!`](@ref) when the source should live
+node-side: every argument is a number, so a model can be exercised with no
+driver-side setup and a test can state its expected output in closed form.
+
+Returns `NaN` when no plugin is open.
+"""
 clp_in_tone(t, waveform, freq, amp) =
     ccall(
     (:clap_in_tone, CLAP_LIB), Cdouble, (Cdouble, Cdouble, Cdouble, Cdouble),
     t, waveform, freq, amp
 )
 
+"""
+    AudioPlugins.clp_process(dep, id0, v0, id1, v1, id2, v2, id3, v3) -> token
+
+Run the plugin over the input block named by `dep` and return the output
+block's token, which [`clap_out`](@ref) and the `clp_out_*` readers then take.
+This is the whole of the processing path: one equation, one call.
+
+Up to four parameters are driven per block by the four `(id, value)` slots,
+pushed into the plugin's input event list as `CLAP_EVENT_PARAM_VALUE` — the
+mechanism CLAP defines, rather than poking the controller behind the
+processor's back. A negative id means the slot is unused, and a value is only
+sent when it differs from the last one sent for that id, so a held-constant
+parameter costs one event on the first block and none afterwards. The ids are
+the `id` field of [`clap_params`](@ref).
+
+Returns `NaN` when nothing is open, or when `dep` does not name the *current*
+input block: a stale token is refused rather than answered from whatever the
+buffer still holds.
+"""
 clp_process(dep, id0, v0, id1, v1, id2, v2, id3, v3) =
     ccall(
     (:clap_process, CLAP_LIB), Cdouble,
@@ -413,10 +449,46 @@ clp_process(dep, id0, v0, id1, v1, id2, v2, id3, v3) =
     dep, id0, v0, id1, v1, id2, v2, id3, v3
 )
 
+"""
+    AudioPlugins.clp_out_rms(dep) -> Float64
+
+Root-mean-square of the output block named by `dep`, over every channel.
+`NaN` when `dep` is not the current output token.
+"""
 clp_out_rms(dep) = ccall((:clap_out_rms, CLAP_LIB), Cdouble, (Cdouble,), dep)
+
+"""
+    AudioPlugins.clp_out_peak(dep) -> Float64
+
+Largest absolute sample in the output block named by `dep`, over every channel.
+`NaN` when `dep` is not the current output token.
+"""
 clp_out_peak(dep) = ccall((:clap_out_peak, CLAP_LIB), Cdouble, (Cdouble,), dep)
+
+"""
+    AudioPlugins.clp_out_valid(dep) -> Float64
+
+`1.0` when `dep` names the current output block and `0.0` when it does not, for
+a model that wants to branch on freshness instead of propagating a `NaN`.
+"""
 clp_out_valid(dep) = ccall((:clap_out_valid, CLAP_LIB), Cdouble, (Cdouble,), dep)
+
+"""
+    AudioPlugins.clp_in_sample(dep, i, ch) -> Float64
+
+Sample `i` of channel `ch` of the input block named by `dep`, zero-based in
+both. `NaN` when `dep` is not the current input token.
+"""
 clp_in_sample(dep, i, ch) =
     ccall((:clap_in_sample, CLAP_LIB), Cdouble, (Cdouble, Cdouble, Cdouble), dep, i, ch)
+
+"""
+    AudioPlugins.clp_out_sample(dep, i, ch) -> Float64
+
+Sample `i` of channel `ch` of the output block named by `dep`, zero-based in
+both. `NaN` when `dep` is not the current output token — which is what makes a
+stale read a visible error rather than a plausible-looking wrong answer.
+[`clap_out`](@ref) is the vector-at-a-time form.
+"""
 clp_out_sample(dep, i, ch) =
     ccall((:clap_out_sample, CLAP_LIB), Cdouble, (Cdouble, Cdouble, Cdouble), dep, i, ch)
