@@ -86,6 +86,62 @@ CLAP_WAVE_RAMP
 CLAP_WAVE_IMPULSE
 ```
 
+## LV2 hosting
+
+The LV2 counterpart of the CLAP surface above, function for function. A plugin is named by
+a URI and found on a search path of bundle directories rather than in one bundle file, and
+a parameter is a control input port whose `id` is its port index.
+
+```@docs
+lv2_host_available
+lv2_lib_path
+lv2_src_path
+lv2_test_bundle
+lv2_scan
+lv2_open!
+lv2_close!
+lv2_is_open
+lv2_plugin_name
+lv2_plugin_uri
+lv2_last_error
+lv2_block_size
+lv2_sample_rate
+lv2_channels
+lv2_n_audio_in
+lv2_n_audio_out
+lv2_latency
+lv2_n_process
+lv2_reset_counters!
+lv2_params
+lv2_param_count
+AudioPlugins.lv2_param_value
+lv2_fill!
+lv2_out
+```
+
+### LV2 node-side operators
+
+```@docs
+AudioPlugins.lv2p_in_tone
+AudioPlugins.lv2p_process
+AudioPlugins.lv2p_in_sample
+AudioPlugins.lv2p_out_sample
+AudioPlugins.lv2p_out_count
+AudioPlugins.lv2p_out_rms
+AudioPlugins.lv2p_out_peak
+AudioPlugins.lv2p_out_valid
+```
+
+### LV2 waveform codes
+
+```@docs
+LV2_WAVE_SILENCE
+LV2_WAVE_SINE
+LV2_WAVE_SQUARE
+LV2_WAVE_RAMP
+LV2_WAVE_IMPULSE
+```
+
 ## Authoring: the descriptor
 
 ```@docs

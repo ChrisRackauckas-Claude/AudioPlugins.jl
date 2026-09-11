@@ -29,7 +29,7 @@ and to author your own ([`export_plugin`](@ref)).
 | Format | Licence | State |
 |---|---|---|
 | **CLAP** | MIT, header-only | host implemented and tested — discovery, instantiation, parameters, block processing, latency. The one format [`export_plugin`](@ref) builds. |
-| **LV2** | ISC | host implemented in C, discovery included — but no Julia binding yet, see [LV2 is implemented in C, but not yet reachable from Julia](@ref) |
+| **LV2** | ISC | host implemented and tested — lilv-based discovery, instantiation, parameters, block processing, latency — see [LV2 discovery goes through lilv](@ref) |
 | VST3 | MIT since SDK 3.8 | not yet implemented |
 
 ## The processing contract

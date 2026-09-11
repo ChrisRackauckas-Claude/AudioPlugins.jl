@@ -22,12 +22,14 @@ The processing contract, which every plugin format shares:
 
 Headless only: no plugin GUI is ever loaded.
 
-The C host is shipped prebuilt by `CLAPHost_jll`; the sources under `csrc/`
-stay in the package for a generated C program to link directly.
+The C hosts are shipped prebuilt by `CLAPHost_jll` and `LV2Host_jll`; the
+sources under `csrc/` stay in the package for a generated C program to link
+directly.
 """
 module AudioPlugins
 
 include("clap_io.jl")
+include("lv2_io.jl")
 include("plugin_export.jl")
 
 end # module

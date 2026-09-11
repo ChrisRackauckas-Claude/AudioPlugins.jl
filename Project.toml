@@ -5,6 +5,7 @@ version = "1.1.2"
 
 [deps]
 CLAPHost_jll = "c9c4f589-041a-5a1c-a149-a4cdc6e5211b"
+LV2Host_jll = "a1fb6e78-af1d-557a-bd91-b38940fc92f3"
 Scratch = "6c6a2e73-6563-6170-7368-637461726353"
 TOML = "fa267f1f-6049-4f14-aa54-33bafae1ed76"
 
@@ -17,6 +18,7 @@ AudioPluginsJuliaCExt = "JuliaC"
 [compat]
 CLAPHost_jll = "1.0"
 JuliaC = "0.3"
+LV2Host_jll = "1.0"
 Libdl = "1"
 SafeTestsets = "0.1"
 SciMLTesting = "2.13"

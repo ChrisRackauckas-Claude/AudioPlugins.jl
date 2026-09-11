@@ -8,6 +8,7 @@ run_tests(;
     core = joinpath(@__DIR__, "clap_host_tests.jl"),
     groups = Dict(
         "Export" => joinpath(@__DIR__, "export_tests.jl"),
+        "LV2" => joinpath(@__DIR__, "lv2_tests.jl"),
         "State" => joinpath(@__DIR__, "state_tests.jl"),
     ),
     qa = (; env = joinpath(@__DIR__, "qa"), body = joinpath(@__DIR__, "qa", "qa.jl")),

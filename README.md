@@ -25,13 +25,14 @@ Two formats:
 | Format | Licence | State |
 |---|---|---|
 | **CLAP** | MIT, header-only | host implemented and tested — discovery, instantiation, parameters, block processing, latency |
-| **LV2** | ISC | host implemented in C — lilv-based discovery, port mapping, audio, parameters; **no Julia binding yet**, see below |
+| **LV2** | ISC | host implemented and tested — lilv-based discovery, instantiation, parameters, block processing, latency |
 | VST3 | MIT since SDK 3.8 | not yet implemented |
 
 ## How the host is shipped
 
-The C host (`csrc/clap_host.c`) is built by [Yggdrasil](https://github.com/JuliaPackaging/Yggdrasil)
-and shipped prebuilt as `CLAPHost_jll`, so using this package needs no C toolchain
+The C hosts (`csrc/clap_host.c`, `csrc/lv2_host.c`) are built by
+[Yggdrasil](https://github.com/JuliaPackaging/Yggdrasil) and shipped prebuilt as
+`CLAPHost_jll` and `LV2Host_jll`, so using this package needs no C toolchain
 and writes nothing into the package directory. The JLL is *in addition to* `csrc/`,
 not a replacement: the sources stay in the repository because a generated
 standalone C program links `clap_host.c` directly, with no Julia present.
@@ -245,24 +246,26 @@ own state, so it carries across blocks like everything else.
 Not yet: privatised (coexisting) Julia steps on Windows, see above; Julia-step bundling is
 tested on Linux and Windows, not on macOS.
 
-## LV2 is implemented in C, but not yet reachable from Julia
+## LV2 discovery goes through lilv
 
 LV2 metadata — which port index is audio in, which is a control and what its range is —
-lives in Turtle/RDF manifests next to the binary rather than in the binary, which in
-practice means `lilv`. `csrc/lv2_host.c` uses it: `lv2_host_scan` loads every bundle under
-an LV2 path and enumerates the plugins, and `lv2_host_open` classifies every port with
-`lilv_port_is_a`, reads control ranges from the manifest, finds the designated latency port
-and connects every port itself. A caller names a plugin by URI and never sees a port index.
-A plugin whose required host features this host does not provide, or which needs an atom,
-CV or event port, is refused at open with a message that says which — an unconnected
-required port is undefined behaviour in the LV2 spec, so refusing is the honest answer.
+lives in Turtle/RDF manifests next to the binary rather than in the binary, so discovery
+needs an RDF reader. A half-correct hand-rolled Turtle parser that silently mis-mapped a
+port would be worse than no discovery at all, so `csrc/lv2_host.c` uses `lilv`, the
+reference reader, shipped as `Lilv_jll` (with `Serd_jll`, `Sord_jll`, `Sratom_jll`,
+`Zix_jll` and `lv2_jll`). `LV2Host_jll` is `lv2_host.c` built against it.
 
-What is missing is the *Julia* half. There are no `ccall` bindings to `lv2_host_*` in
-`src/`, and no `LV2Host_jll` to bind to. The dependency JLLs this needs all exist today —
-`Lilv_jll`, `Serd_jll`, `Sord_jll`, `Sratom_jll`, `lv2_jll`, `Zix_jll` — so the remaining
-work is a Yggdrasil recipe for `LV2Host_jll` and an `src/lv2_io.jl` mirroring
-`src/clap_io.jl`. Until then, LV2 is reachable the way `test/probe_lv2.c` reaches it: from
-C, linking `csrc/lv2_host.c` against lilv.
+`lv2_host_scan` loads every bundle under an LV2 path and enumerates the plugins;
+`lv2_host_open` classifies every port with `lilv_port_is_a`, reads control ranges from the
+manifest, finds the designated latency port and connects every port itself.
+
+Two things follow, and they are the whole of what makes the LV2 API differ from the CLAP
+one here: a plugin is named by a **URI** and found on a **search path** of bundle
+directories rather than by a path to one file, and a parameter is a control input port
+whose id is its port index. A plugin whose required host features this host does not
+provide, or which needs an atom, CV or event port, is refused at open with a message
+saying which — an unconnected required port is undefined behaviour in the LV2
+specification, so refusing is the honest answer.
 
 ## Known limits
 

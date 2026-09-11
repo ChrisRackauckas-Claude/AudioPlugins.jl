@@ -179,12 +179,12 @@ Because these are ours, every expectation is arithmetic rather than a recording:
   - `ap.lookahead` — reported latency is real, and is surfaced rather than silently
     absorbed.
 
-## LV2 is implemented in C, but not yet reachable from Julia
+## LV2 discovery goes through lilv
 
 LV2 metadata — which port index is audio in, which is a control and what its range is —
 lives in Turtle/RDF manifests next to the binary rather than in the binary, which in
-practice means `lilv`. `csrc/lv2_host.c` uses it, and does rather more than the audio
-path:
+practice means `lilv`. `csrc/lv2_host.c` uses it, and `LV2Host_jll` is that file built
+against `Lilv_jll`:
 
   - `lv2_host_scan(lv2_path)` loads every bundle under a search path and enumerates the
     plugins, readable back by URI and name;
@@ -197,10 +197,24 @@ path:
     which. An unconnected required port is undefined behaviour in the LV2 spec, so
     refusing is the honest answer.
 
-What is missing is the *Julia* half: there are no `ccall` bindings to `lv2_host_*` in
-`src/`, and no `LV2Host_jll` for them to call into. Every dependency JLL that needs
-exists today — `Lilv_jll`, `Serd_jll`, `Sord_jll`, `Sratom_jll`, `lv2_jll` and `Zix_jll`
-— so what remains is a Yggdrasil recipe for `LV2Host_jll` and an `src/lv2_io.jl`
-mirroring `src/clap_io.jl`. Until then LV2 is reachable the way `test/probe_lv2.c`
-reaches it: from C, linking `csrc/lv2_host.c` against lilv, which is what the `C probes`
-workflow runs on every pull request.
+Two things follow, and they are the whole of what makes the Julia LV2 API differ from the
+CLAP one. A plugin is named by a **URI** and found on a **search path** of bundle
+directories, rather than by a path to one file:
+
+```julia
+lv2_scan("/usr/lib/lv2")                   # every plugin under a search path
+lv2_open!("/usr/lib/lv2", "http://lv2plug.in/plugins/eg-amp";
+          sample_rate = 48000, block_size = 64, channels = 1)
+```
+
+And a parameter is a control input port, so its id is its port index and it carries the
+`symbol` the manifest gives it as well as a name:
+
+```julia
+lv2_params()
+# (id = 0.0, name = "Gain", symbol = "gain", min = 0.0, max = 4.0, default = 1.0)
+```
+
+Everything else — block size fixed at open, one `process` per tick, tokens, latency
+surfaced and not compensated — is the same contract CLAP's side of this package keeps,
+because it is the same host shape.

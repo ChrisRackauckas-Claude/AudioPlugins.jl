@@ -1,6 +1,7 @@
 [deps]
 AudioPlugins = "83119930-5344-4127-8689-15f5870d6d1a"
 Documenter = "e30172f5-a6a5-5a46-863b-614d45cd2de4"
+LV2Host_jll = "a1fb6e78-af1d-557a-bd91-b38940fc92f3"
 
 [compat]
 Documenter = "1"

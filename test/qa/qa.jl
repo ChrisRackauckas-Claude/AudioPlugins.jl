@@ -21,9 +21,9 @@ run_qa(
     ei_kwargs = (;
         all_qualified_accesses_are_public = (;
             ignore = (
-                # Base's platform triplet, used to name the platform CLAPHost_jll has
-                # no build for. Base declares neither the submodule nor the function
-                # `public`, and there is no public equivalent.
+                # Base's platform triplet, used to name the platform CLAPHost_jll or
+                # LV2Host_jll has no build for. Base declares neither the submodule nor
+                # the function `public`, and there is no public equivalent.
                 :BinaryPlatforms, :host_triplet,
                 # `Base.include(mod, file)` is the documented way to load a file into a
                 # module other than the caller's; the module-scoped `include` cannot
@@ -31,7 +31,7 @@ run_qa(
                 :include,
                 # The JLL interface JLLWrappers generates. Every JLL has these and no
                 # JLL declares them `public`.
-                :is_available, :libclap_host_path,
+                :is_available, :libclap_host_path, :liblv2_host_path,
                 # JuliaC's rpath constants, which any caller of `LinkRecipe` has to
                 # name; not declared `public` in JuliaC.
                 :RPATH_BUNDLE, :RPATH_JULIA,
