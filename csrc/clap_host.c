@@ -22,6 +22,7 @@
 #include <math.h>
 #include <stdarg.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 /* ---------------------------------------------------------------- *
@@ -50,6 +51,18 @@ const char *clap_host_last_error(void) { return ERR; }
 
 #define EV_MAX CLAP_HOST_PARAM_SLOTS
 
+/* One plugin's descriptor, copied rather than pointed at: the strings belong
+ * to the module, and a scan of a bundle we do not go on to open closes it. */
+typedef struct {
+    char id[CLAP_HOST_DESC_STR];
+    char name[CLAP_HOST_DESC_STR];
+    char vendor[CLAP_HOST_DESC_STR];
+    char version[CLAP_HOST_DESC_STR];
+    char description[CLAP_HOST_DESC_STR];
+    long n_features;
+    char features[CLAP_HOST_MAX_FEATURES][CLAP_HOST_FEATURE_STR];
+} desc_t;
+
 typedef struct {
     void                          *dl;
     const clap_plugin_entry_t     *entry;
@@ -65,11 +78,13 @@ typedef struct {
     long   block;         /* frames per process() call, exactly           */
     long   chan;
 
-    /* Descriptor cache from the last scan. */
-    long   n_desc;
-    char   desc_id[32][256];
-    char   desc_name[32][256];
-    char   plugin_name[256];
+    /* Descriptor cache from the last scan, grown to fit whatever the bundle
+     * holds -- the one thing the host cannot size in advance. Allocated at
+     * scan time, never in the processing path. */
+    long    n_desc;
+    long    cap_desc;
+    desc_t *desc;
+    char    plugin_name[256];
 
     /* Parameter cache, read once at open. */
     long   n_params;
@@ -253,9 +268,50 @@ static void unload(void) {
     S.factory = NULL;
 }
 
+/* Not a cap on what a bundle may hold -- the cache grows to fit -- but a
+ * bound on what a factory is believed when it answers get_plugin_count. A
+ * module reporting millions has misread its own memory; refuse it rather
+ * than allocate for it. */
+#define CLAP_HOST_SCAN_SANITY 65536
+
+/* Grow the cache to at least `n` entries. Never shrinks, so scanning a big
+ * bundle and then a small one does not churn the allocation. */
+static int grow_desc(long n) {
+    if (n <= S.cap_desc) return 1;
+    desc_t *p = (desc_t *)realloc(S.desc, (size_t)n * sizeof(desc_t));
+    if (!p) return 0;
+    S.desc = p;
+    S.cap_desc = n;
+    return 1;
+}
+
+/* Copy one factory descriptor into the cache. Every optional field becomes
+ * "" when the plugin left it NULL, so a reader never has to distinguish
+ * "unset" from "empty" -- CLAP itself says the two mean the same thing. */
+static void copy_desc(desc_t *out, const clap_plugin_descriptor_t *d) {
+    memset(out, 0, sizeof *out);
+    snprintf(out->id, sizeof out->id, "%s", d->id ? d->id : "");
+    snprintf(out->name, sizeof out->name, "%s", d->name ? d->name : "");
+    snprintf(out->vendor, sizeof out->vendor, "%s", d->vendor ? d->vendor : "");
+    snprintf(out->version, sizeof out->version, "%s", d->version ? d->version : "");
+    snprintf(out->description, sizeof out->description, "%s",
+             d->description ? d->description : "");
+    out->n_features = 0;
+    if (!d->features) return;
+    for (const char *const *f = d->features;
+         *f && out->n_features < CLAP_HOST_MAX_FEATURES; f++) {
+        snprintf(out->features[out->n_features], CLAP_HOST_FEATURE_STR, "%s", *f);
+        out->n_features++;
+    }
+}
+
 long clap_host_scan(const char *path) {
     ERR[0] = '\0';
     clap_host_close();
+    /* Cleared here rather than just before the loop, so a scan that fails
+     * leaves a count of 0 instead of the previous bundle's. clap_host_close
+     * still preserves the cache, which is what a *failed open* wants. */
+    S.n_desc = 0;
 
     if (!path || !path[0]) { set_err("no plugin path given"); return -1; }
 
@@ -295,13 +351,21 @@ long clap_host_scan(const char *path) {
     S.factory = f;
 
     uint32_t n = f->get_plugin_count(f);
-    if (n > 32) n = 32;                    /* the cache, not the bundle */
-    S.n_desc = 0;
+    if (n > CLAP_HOST_SCAN_SANITY) {
+        set_err("%s reports %u plugins, past the %d this host will believe",
+                path, n, CLAP_HOST_SCAN_SANITY);
+        unload();
+        return -1;
+    }
+    if (!grow_desc((long)n)) {
+        set_err("out of memory caching %u descriptors from %s", n, path);
+        unload();
+        return -1;
+    }
     for (uint32_t i = 0; i < n; i++) {
         const clap_plugin_descriptor_t *d = f->get_plugin_descriptor(f, i);
         if (!d) continue;
-        snprintf(S.desc_id[S.n_desc], sizeof S.desc_id[0], "%s", d->id ? d->id : "");
-        snprintf(S.desc_name[S.n_desc], sizeof S.desc_name[0], "%s", d->name ? d->name : "");
+        copy_desc(&S.desc[S.n_desc], d);
         S.n_desc++;
     }
     if (S.n_desc == 0) {
@@ -312,11 +376,26 @@ long clap_host_scan(const char *path) {
     return S.n_desc;
 }
 
-const char *clap_host_scan_id(long i) {
-    return (i >= 0 && i < S.n_desc) ? S.desc_id[i] : "";
+long clap_host_scan_count(void) { return S.n_desc; }
+
+#define SCAN_FIELD(field)                                       \
+    return (i >= 0 && i < S.n_desc) ? S.desc[i].field : ""
+
+const char *clap_host_scan_id(long i)          { SCAN_FIELD(id); }
+const char *clap_host_scan_name(long i)        { SCAN_FIELD(name); }
+const char *clap_host_scan_vendor(long i)      { SCAN_FIELD(vendor); }
+const char *clap_host_scan_version(long i)     { SCAN_FIELD(version); }
+const char *clap_host_scan_description(long i) { SCAN_FIELD(description); }
+
+#undef SCAN_FIELD
+
+long clap_host_scan_n_features(long i) {
+    return (i >= 0 && i < S.n_desc) ? S.desc[i].n_features : 0;
 }
-const char *clap_host_scan_name(long i) {
-    return (i >= 0 && i < S.n_desc) ? S.desc_name[i] : "";
+const char *clap_host_scan_feature(long i, long k) {
+    if (i < 0 || i >= S.n_desc) return "";
+    if (k < 0 || k >= S.desc[i].n_features) return "";
+    return S.desc[i].features[k];
 }
 
 /* ---------------------------------------------------------------- *
@@ -363,13 +442,13 @@ int clap_host_open(const char *path, const char *plugin_id,
         return 1;
     }
 
-    const char *want = (plugin_id && plugin_id[0]) ? plugin_id : S.desc_id[0];
+    const char *want = (plugin_id && plugin_id[0]) ? plugin_id : S.desc[0].id;
     int found = 0;
     for (long i = 0; i < S.n_desc; i++)
-        if (strcmp(S.desc_id[i], want) == 0) { found = 1; break; }
+        if (strcmp(S.desc[i].id, want) == 0) { found = 1; break; }
     if (!found) {
         set_err("no plugin with id '%s' in %s (it has %ld: first is '%s')",
-                want, path, S.n_desc, S.desc_id[0]);
+                want, path, S.n_desc, S.desc[0].id);
         clap_host_close();
         return 1;
     }

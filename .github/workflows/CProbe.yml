@@ -17,8 +17,9 @@ jobs:
       - name: CLAP
         run: |
           cc -std=gnu99 -O2 -fPIC -shared -Wall -Wextra -o ap_test.clap test/plugins/ap_test_plugins.c
+          cc -std=gnu99 -O2 -fPIC -shared -Wall -Wextra -o ap_many.clap test/plugins/ap_test_many.c
           cc -std=gnu99 -O2 -Wall -Wextra -o probe test/probe.c csrc/clap_host.c -ldl -lm
-          ./probe "$PWD/ap_test.clap" /lib/x86_64-linux-gnu/libm.so.6
+          ./probe "$PWD/ap_test.clap" /lib/x86_64-linux-gnu/libm.so.6 "$PWD/ap_many.clap"
       - name: LV2
         run: |
           mkdir -p lv2/ap_test.lv2
@@ -65,5 +66,6 @@ jobs:
         run: |
           gcc --version | head -1
           gcc -std=gnu99 -O2 -shared -Wall -Wextra -Werror -o ap_test.clap test/plugins/ap_test_plugins.c
+          gcc -std=gnu99 -O2 -shared -Wall -Wextra -Werror -o ap_many.clap test/plugins/ap_test_many.c
           gcc -std=gnu99 -O2 -Wall -Wextra -Werror -o probe.exe test/probe.c csrc/clap_host.c -lm
-          ./probe.exe "$(cygpath -m "$PWD")/ap_test.clap" "$(cygpath -m "$SYSTEMROOT")/System32/kernel32.dll"
+          ./probe.exe "$(cygpath -m "$PWD")/ap_test.clap" "$(cygpath -m "$SYSTEMROOT")/System32/kernel32.dll" "$(cygpath -m "$PWD")/ap_many.clap"

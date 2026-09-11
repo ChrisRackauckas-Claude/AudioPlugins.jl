@@ -4,11 +4,14 @@
  * Build and run from the repository root, against the same sources the JLL
  * is built from:
  *
- *   cc -O2 -fPIC -shared -o /tmp/ap_test.clap test/plugins/ap_test_plugins.c
- *   cc -O2 -o /tmp/probe test/probe.c csrc/clap_host.c -ldl -lm
- *   /tmp/probe /tmp/ap_test.clap
+ *   cc -O2 -fPIC -shared -o ap_test.clap test/plugins/ap_test_plugins.c
+ *   cc -O2 -fPIC -shared -o ap_many.clap test/plugins/ap_test_many.c
+ *   cc -O2 -o probe test/probe.c csrc/clap_host.c -ldl -lm
+ *   ./probe ./ap_test.clap /lib/x86_64-linux-gnu/libm.so.6 ./ap_many.clap
  *
- * (or pass the path `clap_test_bundle()` returns from Julia). */
+ * argv[1] is the bundle (or the path `clap_test_bundle()` returns from
+ * Julia); argv[2] and argv[3] are optional -- a shared object that is not a
+ * plugin, and the many-plugin bundle of test/plugins/ap_test_many.c. */
 
 #include "../csrc/clap_host.h"
 #include <math.h>
@@ -30,10 +33,22 @@ int main(int argc, char **argv) {
     ck(strcmp(clap_host_scan_id(1), "ap.onepole") == 0, "descriptor 1 is ap.onepole");
     ck(strcmp(clap_host_scan_id(2), "ap.lookahead") == 0, "descriptor 2 is ap.lookahead");
     ck(strcmp(clap_host_scan_id(9), "") == 0, "out-of-range descriptor is empty");
+    ck(clap_host_scan_count() == 3, "scan_count agrees with what scan returned");
+
+    /* The rest of the descriptor. */
+    ck(strcmp(clap_host_scan_vendor(0), "JuliaHub") == 0, "descriptor 0 vendor");
+    ck(strcmp(clap_host_scan_version(0), "0.1.0") == 0, "descriptor 0 version");
+    ck(strcmp(clap_host_scan_description(0), "out = in * gain") == 0,
+       "descriptor 0 description");
+    ck(clap_host_scan_n_features(0) == 1, "descriptor 0 has one feature");
+    ck(strcmp(clap_host_scan_feature(0, 0), "audio-effect") == 0, "  and it is audio-effect");
+    ck(strcmp(clap_host_scan_feature(0, 1), "") == 0, "out-of-range feature is empty");
+    ck(clap_host_scan_n_features(9) == 0, "out-of-range descriptor has no features");
 
     /* --- failure paths, all loud ----------------------------------- */
     ck(clap_host_scan("/nonexistent.clap") == -1, "missing bundle fails");
     ck(strlen(clap_host_last_error()) > 0, "  ... and sets an error message");
+    ck(clap_host_scan_count() == 0, "  ... and leaves no descriptors behind");
     if (argc > 2) {   /* optionally: a real shared object that is not a plugin */
         ck(clap_host_scan(argv[2]) == -1, "a shared object without clap_entry fails");
         ck(strstr(clap_host_last_error(), "clap_entry") != NULL,
@@ -140,6 +155,50 @@ int main(int argc, char **argv) {
 
     clap_host_close();
     ck(clap_host_is_open() == 0.0, "closed");
+
+    /* --- a bundle with more plugins than any fixed cache would hold ---
+     * Last, because scanning it replaces the descriptor cache everything
+     * above reads. A host that stopped at 32 reported a 400-plugin bundle
+     * as a 32-plugin bundle, with nothing to say it had. */
+    if (argc > 3) {
+        const char *MANY = argv[3];
+        long m = clap_host_scan(MANY);
+        ck(m == 100, "scan finds all 100 plugins, not a capped 32");
+        ck(clap_host_scan_count() == m, "  scan_count agrees");
+        ck(strcmp(clap_host_scan_id(0), "ap.many.000") == 0, "  first id");
+        ck(strcmp(clap_host_scan_id(99), "ap.many.099") == 0, "  hundredth id");
+        ck(strcmp(clap_host_scan_name(99), "AudioPlugins Many 099") == 0, "  and its name");
+        ck(strcmp(clap_host_scan_id(100), "") == 0, "  one past the end is empty");
+
+        /* Plugin 0 sets every optional field; its neighbours set none. */
+        ck(strcmp(clap_host_scan_vendor(0), "AudioPlugins Test Vendor") == 0, "  vendor");
+        ck(strcmp(clap_host_scan_version(0), "4.5.6") == 0, "  version");
+        ck(strcmp(clap_host_scan_description(0),
+                  "every optional descriptor field, set") == 0, "  description");
+        ck(strcmp(clap_host_scan_vendor(1), "") == 0, "  an unset field reads as empty");
+
+        /* 18 features declared, CLAP_HOST_MAX_FEATURES kept: truncation is
+         * the documented behaviour, and it must not eat the neighbours. */
+        ck(clap_host_scan_n_features(0) == CLAP_HOST_MAX_FEATURES,
+           "  an over-long feature list truncates to the cache size");
+        ck(strcmp(clap_host_scan_feature(0, 0), "audio-effect") == 0, "  feature 0 kept");
+        ck(strcmp(clap_host_scan_feature(0, 1), "stereo") == 0, "  feature 1 kept");
+        ck(clap_host_scan_n_features(1) == 1, "  the next plugin still has its own");
+
+        /* Found is not the same as usable: open one from past the old cap. */
+        ck(clap_host_open(MANY, "ap.many.099", 48000, 64, 1) == 0,
+           "  open the hundredth plugin");
+        double buf[64];
+        for (int i = 0; i < 64; i++) buf[i] = 0.5;
+        double tok = clap_process(clap_in_fill(buf, 64, 1), -1, 0, -1, 0, -1, 0, -1, 0);
+        ck(clap_out_sample(tok, 7, 0) == 0.5, "  and it passes audio through");
+        clap_host_close();
+
+        /* Scanning back down to a small bundle must not report the big
+         * one's count: the cache is grown, not refilled in place. */
+        ck(clap_host_scan(BUNDLE) == 3, "  rescanning the small bundle finds 3 again");
+        ck(strcmp(clap_host_scan_id(3), "") == 0, "  with nothing left over from the big one");
+    }
 
     printf("\n%s (%d failure%s)\n", fails ? "FAILURES" : "ALL PROBES PASS",
            fails, fails == 1 ? "" : "s");

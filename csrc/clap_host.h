@@ -52,6 +52,14 @@ extern "C" {
 #define CLAP_HOST_MAX_PARAMS  64
 #define CLAP_HOST_PARAM_SLOTS 4
 
+/* Sizes of the per-plugin descriptor cache a scan fills. The number of
+ * plugins is not bounded here -- a single CLAP module can hold hundreds,
+ * and a cache that stopped at some round number would report a bundle as
+ * smaller than it is, which is indistinguishable from a bundle that is. */
+#define CLAP_HOST_DESC_STR     256
+#define CLAP_HOST_MAX_FEATURES 12
+#define CLAP_HOST_FEATURE_STR  48
+
 /* ------------------------------------------------------------------ *
  * Driver-side lifecycle and discovery. Not called from inside the
  * node: these take and return strings, and every value crossing a
@@ -67,10 +75,28 @@ extern "C" {
  * clap_host_last_error). Safe to call again. */
 long clap_host_scan(const char *path);
 
+/* How many plugins the last successful scan found, without rescanning.
+ * 0 before the first scan and after one that failed. */
+long clap_host_scan_count(void);
+
 /* Descriptor fields of the i-th plugin from the last successful scan, or
- * "" when i is out of range. Driver-side only -- these are strings. */
+ * "" when i is out of range. Driver-side only -- these are strings.
+ * `id` and `name` are mandatory in CLAP; the rest are optional and come
+ * back "" when the plugin leaves them unset. */
 const char *clap_host_scan_id(long i);
 const char *clap_host_scan_name(long i);
+const char *clap_host_scan_vendor(long i);
+const char *clap_host_scan_version(long i);
+const char *clap_host_scan_description(long i);
+
+/* The i-th plugin's CLAP feature keywords -- "audio-effect", "reverb",
+ * "stereo" and so on, the list a host indexes and classifies by. How many
+ * there are, and the k-th of them ("" when either index is out of range).
+ * A plugin declaring more than CLAP_HOST_MAX_FEATURES keeps the first
+ * CLAP_HOST_MAX_FEATURES: these are classification hints, and no plugin
+ * needs a dozen of them to say what it is. */
+long        clap_host_scan_n_features(long i);
+const char *clap_host_scan_feature(long i, long k);
 
 /* Instantiate and activate. `plugin_id` selects from the bundle; pass ""
  * or NULL for the first plugin. `block_size` is the exact number of frames
