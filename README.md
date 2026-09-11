@@ -25,7 +25,7 @@ Two formats:
 | Format | Licence | State |
 |---|---|---|
 | **CLAP** | MIT, header-only | host implemented and tested — discovery, instantiation, parameters, block processing, latency |
-| **LV2** | ISC | audio path implemented (`connect_port` / `run`); **discovery is not**, see below |
+| **LV2** | ISC | host implemented in C — lilv-based discovery, port mapping, audio, parameters; **no Julia binding yet**, see below |
 | VST3 | MIT since SDK 3.8 | not yet implemented |
 
 ## How the host is shipped
@@ -245,17 +245,24 @@ own state, so it carries across blocks like everything else.
 Not yet: privatised (coexisting) Julia steps on Windows, see above; Julia-step bundling is
 tested on Linux and Windows, not on macOS.
 
-## LV2 discovery is missing, and why
+## LV2 is implemented in C, but not yet reachable from Julia
 
-The LV2 *audio* path is genuinely simpler than CLAP's — one ISC header, ports connected
-once by index, then `run(n_samples)`. Discovery is the problem: LV2 metadata lives in
-Turtle/RDF manifests, which in practice means `lilv`, which needs `serd`, `sord` and
-`sratom`. Julia's General registry currently has only `Serd_jll`.
+LV2 metadata — which port index is audio in, which is a control and what its range is —
+lives in Turtle/RDF manifests next to the binary rather than in the binary, which in
+practice means `lilv`. `csrc/lv2_host.c` uses it: `lv2_host_scan` loads every bundle under
+an LV2 path and enumerates the plugins, and `lv2_host_open` classifies every port with
+`lilv_port_is_a`, reads control ranges from the manifest, finds the designated latency port
+and connects every port itself. A caller names a plugin by URI and never sees a port index.
+A plugin whose required host features this host does not provide, or which needs an atom,
+CV or event port, is refused at open with a message that says which — an unconnected
+required port is undefined behaviour in the LV2 spec, so refusing is the honest answer.
 
-So the audio path here takes the port map as explicit arguments instead. A half-correct
-hand-rolled Turtle parser that silently mis-maps a port would be worse than no discovery at
-all. The fix is Yggdrasil recipes for the missing JLLs, which would benefit every Julia
-audio project rather than only this one.
+What is missing is the *Julia* half. There are no `ccall` bindings to `lv2_host_*` in
+`src/`, and no `LV2Host_jll` to bind to. The dependency JLLs this needs all exist today —
+`Lilv_jll`, `Serd_jll`, `Sord_jll`, `Sratom_jll`, `lv2_jll`, `Zix_jll` — so the remaining
+work is a Yggdrasil recipe for `LV2Host_jll` and an `src/lv2_io.jl` mirroring
+`src/clap_io.jl`. Until then, LV2 is reachable the way `test/probe_lv2.c` reaches it: from
+C, linking `csrc/lv2_host.c` against lilv.
 
 ## Known limits
 

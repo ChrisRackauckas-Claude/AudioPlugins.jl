@@ -179,15 +179,28 @@ Because these are ours, every expectation is arithmetic rather than a recording:
   - `ap.lookahead` — reported latency is real, and is surfaced rather than silently
     absorbed.
 
-## LV2 discovery
+## LV2 is implemented in C, but not yet reachable from Julia
 
-The LV2 *audio* path is implemented in C (`csrc/lv2_host.c`) and is genuinely simpler
-than CLAP's — one ISC header, ports connected once by index, then `run(n_samples)`.
-Discovery is the problem: LV2 metadata lives in Turtle/RDF manifests, which in practice
-means `lilv`, which needs `serd`, `sord` and `sratom`, and Julia's General registry
-currently has only `Serd_jll`.
+LV2 metadata — which port index is audio in, which is a control and what its range is —
+lives in Turtle/RDF manifests next to the binary rather than in the binary, which in
+practice means `lilv`. `csrc/lv2_host.c` uses it, and does rather more than the audio
+path:
 
-So the audio path takes the port map as explicit arguments instead. A half-correct
-hand-rolled Turtle parser that silently mis-mapped a port would be worse than no
-discovery at all. The fix is Yggdrasil recipes for the missing JLLs, which would benefit
-every Julia audio project rather than only this one.
+  - `lv2_host_scan(lv2_path)` loads every bundle under a search path and enumerates the
+    plugins, readable back by URI and name;
+  - `lv2_host_open(lv2_path, uri, …)` classifies every port with `lilv_port_is_a`, reads
+    control ranges out of the manifest, finds the designated `lv2:latency` port, and
+    connects every port itself — so a caller names a plugin by URI and never sees a port
+    index;
+  - a plugin that requires a host feature this host does not provide, or an atom, CV or
+    event port that is not `connectionOptional`, is refused at open with a message saying
+    which. An unconnected required port is undefined behaviour in the LV2 spec, so
+    refusing is the honest answer.
+
+What is missing is the *Julia* half: there are no `ccall` bindings to `lv2_host_*` in
+`src/`, and no `LV2Host_jll` for them to call into. Every dependency JLL that needs
+exists today — `Lilv_jll`, `Serd_jll`, `Sord_jll`, `Sratom_jll`, `lv2_jll` and `Zix_jll`
+— so what remains is a Yggdrasil recipe for `LV2Host_jll` and an `src/lv2_io.jl`
+mirroring `src/clap_io.jl`. Until then LV2 is reachable the way `test/probe_lv2.c`
+reaches it: from C, linking `csrc/lv2_host.c` against lilv, which is what the `C probes`
+workflow runs on every pull request.
