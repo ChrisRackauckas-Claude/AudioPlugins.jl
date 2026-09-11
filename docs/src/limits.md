@@ -29,7 +29,13 @@ is just a slow run. It stops being harmless the moment this is driven from a liv
 with a deadline, where a plugin that allocates or blocks inside `process()` produces
 dropouts that look like a modelling error.
 
-Tracked as [issue #8](https://github.com/SciML/AudioPlugins.jl/issues/8).
+A live mode is therefore not offered. Its only honest shape — a pinned thread that owns
+the plugin, with Julia on the far side of a lock-free ring buffer — removes Julia from
+the audio path entirely, and what remains is a C program driving `csrc/clap_host.c`,
+which the shipped sources already exist to serve. Such a path could only ever host C
+steps anyway: a juliac-compiled plugin keeps a garbage collector in the audio callback
+whatever the host promises. Decided in
+[issue #8](https://github.com/SciML/AudioPlugins.jl/issues/8).
 
 ## Reported latency is surfaced, not compensated
 

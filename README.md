@@ -265,7 +265,10 @@ audio project rather than only this one.
 - **Realtime discipline is not provided.** CLAP asks a host to keep an audio thread that
   never blocks and never allocates. A garbage-collected process driving a solver that may
   retry a step cannot promise that. Harmless offline; not harmless on a live capture with a
-  deadline.
+  deadline. A live mode is not offered: its only honest shape — a pinned thread owning the
+  plugin, Julia on the far side of a lock-free ring buffer — is a C program over
+  `csrc/clap_host.c`, which the shipped sources already serve, and only a C step could run
+  on it anyway, since a juliac plugin keeps a collector in the callback.
 - **Reported latency is surfaced, not compensated.** Callers that care must align the
   stream themselves.
 

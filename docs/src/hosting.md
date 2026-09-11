@@ -88,6 +88,10 @@ solver rather than from a script:
     rate but cannot see your clock. Feed it every sample exactly once, or the output is
     valid-looking audio that is not continuous.
 
+And nothing on this path is realtime: every call runs on your thread, may allocate or be
+descheduled, and observes no deadline — harmless offline, which is what the package is
+for, and a reason a live mode is not offered. See [No realtime discipline](@ref).
+
 ## Driving parameters
 
 `AudioPlugins.clp_process` carries four `(id, value)` slots. Each is a parameter id from

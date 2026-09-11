@@ -232,6 +232,10 @@ block fails here, loudly, rather than at the first tick.
 
 `block_size` is the editing-chain contract — it must equal the number of frames
 each tick carries, or the stream is not contiguous.
+
+The path this opens is an offline one: activation here and every later
+`process()` run on the caller's thread, which is free to allocate, collect and
+be descheduled, and no deadline is observed — see [No realtime discipline](@ref).
 """
 function clap_open!(
         path::AbstractString; plugin_id::AbstractString = "",
@@ -369,6 +373,9 @@ clap_param_value(param_id::Real) =
 
 Fill the input block from `samples` (per channel) and return its token, so a
 driver or a test can supply audio the node then processes.
+
+Runs on the caller's thread with no realtime guarantee, like everything on this
+path — see [No realtime discipline](@ref).
 """
 function clap_fill!(samples::AbstractVector{<:Real}; channels::Integer = 1)
     v = Vector{Cdouble}(samples)
@@ -384,6 +391,9 @@ end
 The output block named by `token`. Empty when the token is stale — the same
 refusal the node-side accessors make, so a test cannot accidentally check
 yesterday's audio.
+
+Allocates a fresh vector per block and observes no deadline, like the rest of
+the path — see [No realtime discipline](@ref).
 """
 function clap_out(token::Real; channel::Integer = 0)
     n = ccall((:clap_out_count, CLAP_LIB), Cdouble, (Cdouble,), token)
@@ -411,6 +421,9 @@ the input block with it on every channel, and return its token. `waveform` is a
 node-side: every argument is a number, so a model can be exercised with no
 driver-side setup and a test can state its expected output in closed form.
 
+Runs on the caller's thread with no realtime guarantee — see
+[No realtime discipline](@ref).
+
 Returns `NaN` when no plugin is open.
 """
 clp_in_tone(t, waveform, freq, amp) =
@@ -433,6 +446,11 @@ processor's back. A negative id means the slot is unused, and a value is only
 sent when it differs from the last one sent for that id, so a held-constant
 parameter costs one event on the first block and none afterwards. The ids are
 the `id` field of [`clap_params`](@ref).
+
+The call is the plugin's `process()` itself, on the caller's thread: nothing is
+pinned, nothing is kept from allocating or collecting, and no deadline is
+observed. Offline that is harmless; against a live capture with a deadline it
+is not — and a live mode is not offered. See [No realtime discipline](@ref).
 
 Returns `NaN` when nothing is open, or when `dep` does not name the *current*
 input block: a stale token is refused rather than answered from whatever the

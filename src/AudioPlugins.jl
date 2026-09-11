@@ -20,7 +20,9 @@ The processing contract, which every plugin format shares:
   * plugin state persisting across blocks;
   * scalar parameters that may change per block.
 
-Headless only: no plugin GUI is ever loaded.
+Headless only: no plugin GUI is ever loaded. And offline only: processing runs
+on the caller's thread with no realtime guarantee — no pinned audio thread, no
+promise against allocation or collection, no deadline observed.
 
 The C host is shipped prebuilt by `CLAPHost_jll`; the sources under `csrc/`
 stay in the package for a generated C program to link directly.
