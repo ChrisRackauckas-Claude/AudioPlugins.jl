@@ -210,6 +210,13 @@ end
 
 Enumerate a `.clap` bundle without instantiating anything. Throws with the
 host's own message when the bundle cannot be loaded.
+
+!!! warning
+    Scanning **closes whatever plugin is open**: the host holds one module at
+    a time, and a scan has to load the one it is scanning.
+
+[`register_bundle!`](@ref) is the same enumeration, remembered, so that a
+plugin can be opened by id without naming its bundle again.
 """
 function clap_scan(path::AbstractString)
     n = ccall((:clap_host_scan, CLAP_LIB), Clong, (Cstring,), path)
@@ -225,6 +232,7 @@ end
 
 """
     clap_open!(path; plugin_id = "", sample_rate = 48000, block_size = 512, channels = 1)
+    clap_open!(plugin_id; sample_rate = 48000, block_size = 512, channels = 1)
 
 Instantiate and activate a plugin at a **fixed** block size: the plugin is
 activated with `min == max == block_size`, so one that cannot work at a fixed
@@ -232,19 +240,37 @@ block fails here, loudly, rather than at the first tick.
 
 `block_size` is the editing-chain contract — it must equal the number of frames
 each tick carries, or the stream is not contiguous.
+
+The first argument is a bundle path, or — when no `plugin_id` is given and it
+is not a path — the id of a plugin some [`register_bundle!`](@ref) has put in
+the registry, which is how a plugin collection shipped as a JLL is opened
+without naming a file. With an empty registry the two are the same thing and
+this behaves exactly as it always did.
 """
 function clap_open!(
         path::AbstractString; plugin_id::AbstractString = "",
         sample_rate::Real = 48000, block_size::Integer = 512,
         channels::Integer = 1
     )
+    bundle, id = _resolve_plugin(path, plugin_id)
     r = ccall(
         (:clap_host_open, CLAP_LIB), Cint,
         (Cstring, Cstring, Cdouble, Cdouble, Cdouble),
-        path, plugin_id, sample_rate, block_size, channels
+        bundle, id, sample_rate, block_size, channels
     )
     r == 0 || error("clap_open!($(repr(path))) failed: $(clap_last_error())")
     return nothing
+end
+
+# Which bundle, and which plugin in it. An explicit `plugin_id`, or a string
+# that names a file, is taken at face value: a caller who said where to look is
+# never second-guessed, and a registry that is empty -- the default, since no
+# collection ships with this package -- cannot change any existing behaviour.
+function _resolve_plugin(path::AbstractString, plugin_id::AbstractString)
+    (!isempty(plugin_id) || ispath(path)) && return (path, plugin_id)
+    hit = find_plugin(path)
+    hit === nothing && return (path, plugin_id)   # let the host give its own error
+    return (hit.bundle, hit.id)
 end
 
 "Deactivate, destroy and unload. Safe when nothing is open."

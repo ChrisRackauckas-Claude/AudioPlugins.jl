@@ -35,6 +35,20 @@ clap_plugin_name
 clap_last_error
 ```
 
+## Hosting: the bundle registry
+
+Which `.clap` modules are available, and what is in them. Nothing is registered until
+something registers it — see [Plugin collections: the bundle registry](@ref).
+
+```@docs
+register_bundle!
+unregister_bundle!
+bundles
+plugins
+AudioPlugins.find_plugin
+AudioPlugins.RegisteredBundle
+```
+
 ## Hosting: configuration in force
 
 ```@docs

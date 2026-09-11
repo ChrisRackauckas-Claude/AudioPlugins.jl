@@ -28,6 +28,15 @@ stay in the package for a generated C program to link directly.
 module AudioPlugins
 
 include("clap_io.jl")
+include("bundles.jl")
 include("plugin_export.jl")
+
+# The bundle registry is runtime state -- a package extension fills it when
+# its JLL loads. Emptied here so that nothing a precompilation happened to
+# register is baked into the image and outlives the depot it pointed into.
+function __init__()
+    empty!(BUNDLE_REGISTRY)
+    return nothing
+end
 
 end # module

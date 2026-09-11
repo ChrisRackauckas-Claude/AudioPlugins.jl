@@ -139,6 +139,73 @@ the arguments and two reads in one tick cannot disagree. The waveform codes are
 [`CLAP_WAVE_SILENCE`](@ref), [`CLAP_WAVE_SINE`](@ref), [`CLAP_WAVE_SQUARE`](@ref),
 [`CLAP_WAVE_RAMP`](@ref) and [`CLAP_WAVE_IMPULSE`](@ref).
 
+## Plugin collections: the bundle registry
+
+Opening a plugin by path works, but a collection shipped as a JLL has a path only the JLL
+knows. The registry is the seam: a small sublibrary package wrapping the JLL calls
+[`register_bundle!`](@ref) with the path it exposes, and from then on every plugin in that
+bundle is openable by its id alone.
+
+```julia
+using AudioPlugins, AudioPluginsSomeCollection   # the sublibrary registers on load
+
+plugins()                    # every plugin from every registered bundle
+plugins(SomeCollection_jll)  # just this collection's
+
+clap_open!("org.example.galactic"; sample_rate = 48000, block_size = 256, channels = 2)
+```
+
+[`plugins`](@ref) returns `(id, name, bundle, index, source)` per plugin: `index` is its
+position in its own bundle's factory, and `source` the module that registered it.
+[`bundles`](@ref) is the same view one level up — path, source, and plugin count.
+
+**Nothing is registered by default.** No plugin collection ships with this package and
+none is downloaded; with no sublibrary installed, `plugins()` is empty and `clap_open!`
+behaves exactly as it always did. That is deliberate rather than incidental: the
+collections worth bundling are mostly GPL, and an MIT package that merely knows how to
+host them must not make that a transitive obligation of everyone who installs it. A
+collection is opt-in — you install it by name and `using` it — and what you load runs **in
+your process**, so its licence and its stability are both yours (see
+[Plugins run in-process](@ref)).
+
+Registering by hand is the same call:
+
+```julia
+register_bundle!("/path/to/Collection.clap")            # -> number of plugins registered
+register_bundle!(path; source = MyCollection_jll)       # label it, for plugins(mod)
+unregister_bundle!(path)
+```
+
+A bundle that cannot be loaded is refused **at registration**, with the host's own
+message, rather than part-way through a render — which is the other thing the registry
+buys: a collection whose descriptors disagree with reality is caught at `using` time.
+
+Two caveats follow from the host holding one module at a time:
+
+  - **Registering closes whatever is open.** A scan has to load the bundle it is
+    scanning, and that evicts the open plugin. Register before you open, not between
+    blocks.
+  - **An id two registered bundles both declare is refused, not guessed.** Opening it
+    throws and names both bundles; say which you mean with
+    `clap_open!(bundle; plugin_id = id)`.
+
+Wrapping a collection is about six lines:
+
+```julia
+module AudioPluginsSomeCollection
+using AudioPlugins: register_bundle!
+using SomeCollection_jll: SomeCollection_jll
+__init__() = register_bundle!(SomeCollection_jll.collection_clap; source = SomeCollection_jll)
+end
+```
+
+Such a wrapper lives under `lib/` in this repository as its own package, so that
+installing it is what pulls the JLL in — nothing about depending on AudioPlugins does.
+A package that already depends on the JLL for its own reasons can register from a package
+extension instead; the registry does not care which. The `.clap` module is a `FileProduct`
+in the JLL — it is a `.so`/`.dll` on Linux and Windows and a bundle directory on macOS,
+and `FileProduct` covers both.
+
 ## How the host is shipped
 
 The C host (`csrc/clap_host.c`) is built by
