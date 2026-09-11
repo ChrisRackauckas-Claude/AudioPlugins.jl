@@ -29,6 +29,12 @@ run_qa(
                 # module other than the caller's; the module-scoped `include` cannot
                 # do it. Documented in the manual, but not declared `public` in Base.
                 :include,
+                # `Meta.parse`, and `Base.shell_split` for splitting a pkg-config flag
+                # string. Both are documented Base functionality with no public
+                # equivalent, and both were declared `public` only in 1.12 -- so the
+                # check passes on the 1.12+ that CI's `julia-version: 1` resolves and
+                # trips on 1.11, which `julia = "1.10"` obliges us to support.
+                :parse, :shell_split,
                 # The JLL interface JLLWrappers generates. Every JLL has these and no
                 # JLL declares them `public`.
                 :is_available, :libclap_host_path,
