@@ -58,6 +58,27 @@ using Preferences, CLAPHost_jll
 set_preferences!(CLAPHost_jll, "libclap_host_path" => "/path/to/libclap_host.so")
 ```
 
+## Plugin collections
+
+Opening a plugin by path works; a collection shipped as a JLL has a path only the JLL
+knows. `register_bundle!` is the seam — a sublibrary under `lib/` wraps the JLL and
+registers the bundle it ships, and every plugin in it becomes openable by id:
+
+<!-- illustrative -->
+```julia
+using AudioPlugins, AudioPluginsSomeCollection   # the sublibrary registers on load
+
+plugins()                                # every plugin from every registered bundle
+clap_open!("org.example.galactic"; sample_rate = 48000, block_size = 256, channels = 2)
+```
+
+**Nothing is registered by default.** No collection ships with this package and none is
+downloaded: with no sublibrary installed the registry is empty and `clap_open!` behaves
+exactly as it always did. That is the point — the collections worth bundling are mostly
+GPL, and an MIT package that merely knows how to host them must not make that a
+transitive obligation of everyone who installs it. Installing one is opt-in, by name, and
+what you load runs in-process (see "Known limits").
+
 ## Why the API looks like C rather than like Julia
 
 The host is deliberately a thin layer over named `ccall`s into a shared library at a fixed

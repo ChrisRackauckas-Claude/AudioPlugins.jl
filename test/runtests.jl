@@ -7,6 +7,7 @@ using SciMLTesting
 run_tests(;
     core = joinpath(@__DIR__, "clap_host_tests.jl"),
     groups = Dict(
+        "Bundles" => joinpath(@__DIR__, "bundle_tests.jl"),
         "Export" => joinpath(@__DIR__, "export_tests.jl"),
         "State" => joinpath(@__DIR__, "state_tests.jl"),
     ),
