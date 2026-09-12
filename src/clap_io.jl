@@ -30,7 +30,7 @@
 export build_clap_host!, clap_host_available, clap_lib_path, clap_src_path, clap_scan,
     clap_open!, clap_close!,
     clap_is_open, clap_last_error, clap_plugin_name,
-    clap_params, clap_param_count, clap_latency,
+    clap_params, clap_param_count, clap_latency, clap_compensating, clap_flush!,
     clap_block_size, clap_sample_rate, clap_n_process, clap_reset_counters!,
     clap_fill!, clap_out, clap_test_bundle,
     CLAP_WAVE_SILENCE, CLAP_WAVE_SINE, CLAP_WAVE_SQUARE,
@@ -219,6 +219,7 @@ host's own message when the bundle cannot be loaded.
 plugin can be opened by id without naming its bundle again.
 """
 function clap_scan(path::AbstractString)
+    _COMP[] = nothing    # the C scan closes any open plugin; so does this one
     n = ccall((:clap_host_scan, CLAP_LIB), Clong, (Cstring,), path)
     n < 0 && error("clap_scan($(repr(path))) failed: $(clap_last_error())")
     return [
@@ -231,8 +232,10 @@ function clap_scan(path::AbstractString)
 end
 
 """
-    clap_open!(path; plugin_id = "", sample_rate = 48000, block_size = 512, channels = 1)
-    clap_open!(plugin_id; sample_rate = 48000, block_size = 512, channels = 1)
+    clap_open!(path; plugin_id = "", sample_rate = 48000, block_size = 512,
+               channels = 1, compensate_latency = false)
+    clap_open!(plugin_id; sample_rate = 48000, block_size = 512,
+               channels = 1, compensate_latency = false)
 
 Instantiate and activate a plugin at a **fixed** block size: the plugin is
 activated with `min == max == block_size`, so one that cannot work at a fixed
@@ -246,19 +249,27 @@ is not a path — the id of a plugin some [`register_bundle!`](@ref) has put in
 the registry, which is how a plugin collection shipped as a JLL is opened
 without naming a file. With an empty registry the two are the same thing and
 this behaves exactly as it always did.
+
+`compensate_latency` opts in to Julia-side latency compensation — see
+[`clap_out`](@ref) and [`clap_flush!`](@ref). It is off by default: the
+documented behaviour is that [`clap_latency`](@ref) is surfaced, not
+compensated, and a generated C program linking `csrc/` never sees the mode.
 """
 function clap_open!(
         path::AbstractString; plugin_id::AbstractString = "",
         sample_rate::Real = 48000, block_size::Integer = 512,
-        channels::Integer = 1
+        channels::Integer = 1, compensate_latency::Bool = false
     )
     bundle, id = _resolve_plugin(path, plugin_id)
+    _COMP[] = nothing    # a failed open below still closed whatever was open
     r = ccall(
         (:clap_host_open, CLAP_LIB), Cint,
         (Cstring, Cstring, Cdouble, Cdouble, Cdouble),
         bundle, id, sample_rate, block_size, channels
     )
     r == 0 || error("clap_open!($(repr(path))) failed: $(clap_last_error())")
+    compensate_latency &&
+        (_COMP[] = _LatencyComp(Int(clap_latency()), Int(channels)))
     return nothing
 end
 
@@ -275,6 +286,7 @@ end
 
 "Deactivate, destroy and unload. Safe when nothing is open."
 function clap_close!()
+    _COMP[] = nothing
     ccall((:clap_host_close, CLAP_LIB), Cvoid, ())
     return nothing
 end
@@ -340,9 +352,10 @@ clap_param_count() = ccall((:clap_host_n_params, CLAP_LIB), Clong, ())
 """
     clap_latency() -> Float64
 
-Latency the plugin reports, in samples. **Not compensated** — hosting a
-lookahead plugin leaves its output shifted by this many samples relative to the
-input, and a model that cares must align downstream itself.
+Latency the plugin reports, in samples. **Not compensated by default** —
+hosting a lookahead plugin leaves its output shifted by this many samples
+relative to the input, and a model that cares must align downstream itself or
+open with `compensate_latency = true` (see [`clap_open!`](@ref)).
 """
 clap_latency() = ccall((:clap_host_latency, CLAP_LIB), Cdouble, ())
 
@@ -409,9 +422,27 @@ end
 
 The output block named by `token`. Empty when the token is stale — the same
 refusal the node-side accessors make, so a test cannot accidentally check
-yesterday's audio.
+yesterday's audio. (Under latency compensation a stale token is an error
+instead — see below.)
+
+When the plugin was opened with `compensate_latency = true` this is instead the
+next block of the *aligned* stream: the plugin's reported latency is removed by
+discarding its first `clap_latency()` output samples, so output block `k`
+corresponds to input block `k`. A shift that is not a whole number of blocks
+cannot land in one call, so for `0 < clap_latency()` the first
+`ceil(clap_latency() / block_size)` reads return `Float64[]` while the shift is
+absorbed, and [`clap_flush!`](@ref) yields the tail at end of stream. Two extra
+rules apply under the mode, both enforced loudly: every processed block must be
+read once (a skipped block would silently misalign the stream), and a plugin
+that changes its latency mid-stream errors on the next read.
 """
 function clap_out(token::Real; channel::Integer = 0)
+    comp = _COMP[]
+    comp === nothing && return _raw_out(token, channel)
+    return _comp_out(comp, token, Int(channel))
+end
+
+function _raw_out(token, channel)
     n = ccall((:clap_out_count, CLAP_LIB), Cdouble, (Cdouble,), token)
     isnan(n) && return Float64[]
     return [
@@ -420,6 +451,142 @@ function clap_out(token::Real; channel::Integer = 0)
             token, i, channel
         ) for i in 0:(Int(n) - 1)
     ]
+end
+
+# ---------------------------------------------------------------------------
+# Latency compensation (driver-side, opt-in)
+#
+# A plugin with latency N returns N samples of pre-roll at the head of its
+# output: its output block k corresponds to input samples kB..kB+B-1 shifted
+# back by N. Aligned output block k therefore needs input samples through
+# kB+B-1+N — the future, when block k is the one just fed. So the aligned
+# stream lags by ceil(N/B) blocks no matter what; the mode discards the first
+# N output samples (the pre-roll; feeding silence first changes only which
+# samples are discarded, not the lag), buffers the rest, emits a block once one
+# is whole, and clap_flush! feeds the N samples of zeros that collect the tail.
+# Mirroring the host's single-plugin-at-a-time design, the state is one
+# module-level value reset by open/close.
+# ---------------------------------------------------------------------------
+
+mutable struct _LatencyComp
+    latency::Int             # N, captured at open; verified on every drain
+    skip::Int                # raw output samples still to discard (the pre-roll)
+    pending::Vector{Vector{Float64}}      # aligned samples not yet emitted, per channel
+    emitted::Vector{Int}                  # aligned samples handed out, per channel
+    fed::Int                 # input samples processed (per channel), flush zeros excluded
+    last_drained::Float64    # newest output token folded into `pending`
+    blocks::Vector{Union{Nothing, Vector{Float64}}}  # this token's emitted block, per channel
+    tails::Vector{Union{Nothing, Vector{Float64}}}   # flush output served, per channel
+    zeros_fed::Bool                  # flush silence already pushed through
+end
+
+_LatencyComp(latency::Int, channels::Int) = _LatencyComp(
+    latency, latency, [Float64[] for _ in 1:channels], zeros(Int, channels), 0, 0.0,
+    Union{Nothing, Vector{Float64}}[nothing for _ in 1:channels],
+    Union{Nothing, Vector{Float64}}[nothing for _ in 1:channels], false
+)
+
+const _COMP = Ref{Union{Nothing, _LatencyComp}}(nothing)
+
+"""
+    clap_compensating() -> Bool
+
+Whether the open plugin was opened with `compensate_latency = true` — i.e.
+whether [`clap_out`](@ref) returns the aligned stream rather than the raw
+output block.
+"""
+clap_compensating() = _COMP[] !== nothing
+
+function _drain!(comp::_LatencyComp, token; real_input::Bool = true)
+    token == comp.last_drained + 1 || error(
+        "latency compensation: output block(s) $(Int(comp.last_drained) + 1):" *
+            "$(round(Int, token) - 1) were processed but never read; the " *
+            "compensated stream cannot skip a block"
+    )
+    live = Int(clap_latency())
+    live == comp.latency || error(
+        "latency compensation: plugin latency changed mid-stream " *
+            "($(comp.latency) -> $live samples); reopen to compensate the new latency"
+    )
+    # Every channel discards the same N-sample pre-roll: drop once per drain,
+    # not once per channel.
+    drop = min(comp.skip, clap_block_size())
+    comp.skip -= drop
+    for c in eachindex(comp.pending)
+        raw = _raw_out(token, c - 1)
+        append!(comp.pending[c], raw[(drop + 1):end])
+    end
+    real_input && (comp.fed += clap_block_size())
+    comp.last_drained = token
+    fill!(comp.blocks, nothing)
+    return nothing
+end
+
+function _comp_out(comp::_LatencyComp, token::Real, channel::Int)
+    clap_is_open() || error("clap_out: no plugin is open")
+    isnan(token) && error("clap_out: the process call failed (token is NaN)")
+    if clp_out_valid(token) != 1.0
+        error(
+            "clap_out: token $token is not the current output block; under latency " *
+                "compensation every processed block must be read once, in order"
+        )
+    end
+    token == comp.last_drained || _drain!(comp, token)
+    c = channel + 1
+    1 <= c <= length(comp.pending) ||
+        error("clap_out: channel $channel out of range (the plugin was opened with $(length(comp.pending)))")
+    out = comp.blocks[c]
+    if out === nothing
+        out = length(comp.pending[c]) >= clap_block_size() ?
+            splice!(comp.pending[c], 1:clap_block_size()) : Float64[]
+        comp.emitted[c] += length(out)
+        comp.blocks[c] = out
+    end
+    return out
+end
+
+"""
+    clap_flush!(; channel = 0) -> Vector{Float64}
+
+The tail of the aligned stream under latency compensation: feeds the plugin
+`ceil(clap_latency() / block_size)` blocks of zeros — held parameter values
+persist, so no parameter events are sent — and returns the aligned samples for
+`channel` that [`clap_out`](@ref) has not yielded yet: `ceil(latency /
+block_size) * block_size` of them after a run of full input blocks, so the
+aligned samples from `clap_out` plus this tail total exactly the number fed in.
+
+Errors when the plugin was not opened with `compensate_latency = true`. The
+silence is pushed through once; each channel's tail is computed on that
+channel's first call, and a repeat call returns it again — the same
+read-is-idempotent convention as [`clap_out`](@ref).
+"""
+function clap_flush!(; channel::Integer = 0)
+    comp = _COMP[]
+    comp === nothing && error(
+        "clap_flush!: the open plugin was not opened with `compensate_latency = true`"
+    )
+    c = Int(channel) + 1
+    1 <= c <= length(comp.pending) ||
+        error("clap_flush!: channel $channel out of range (the plugin was opened with $(length(comp.pending)))")
+    if !comp.zeros_fed
+        comp.zeros_fed = true
+        block = clap_block_size()
+        for _ in 1:cld(comp.latency, block)
+            tok = clap_fill!(zeros(block))
+            isnan(tok) && error("clap_flush!: $(clap_last_error())")
+            out = clp_process(tok, -1.0, 0.0, -1.0, 0.0, -1.0, 0.0, -1.0, 0.0)
+            isnan(out) && error("clap_flush!: $(clap_last_error())")
+            _drain!(comp, out; real_input = false)
+        end
+    end
+    tail = comp.tails[c]
+    if tail === nothing
+        owed = comp.fed - comp.emitted[c]
+        tail = splice!(comp.pending[c], 1:min(owed, length(comp.pending[c])))
+        comp.emitted[c] += length(tail)
+        comp.tails[c] = tail
+    end
+    return tail
 end
 
 # ---------------------------------------------------------------------------

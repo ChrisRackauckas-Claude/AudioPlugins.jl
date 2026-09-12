@@ -31,18 +31,26 @@ dropouts that look like a modelling error.
 
 Tracked as [issue #8](https://github.com/SciML/AudioPlugins.jl/issues/8).
 
-## Reported latency is surfaced, not compensated
+## Reported latency is surfaced, not compensated, by default
 
 [`clap_latency`](@ref) returns the latency the plugin declares, in samples. The host
 reports that number and does nothing with it. Hosting a lookahead limiter therefore leaves
 its output shifted by that many samples relative to the input.
 
-Compensating it means delaying the dry path by the same amount, which needs a delay line
-the host does not have. A caller that cares must read the number and align downstream
-itself. The `ap.lookahead` test plugin exists to keep this honest: its reported latency is
-real, and the tests assert that it is surfaced rather than silently absorbed.
+The C hosts keep exactly that behaviour — they stay minimal, because a generated standalone
+program links `csrc/` directly and gets only what is documented there. The Julia layer does
+offer compensation as an opt-in: open with `compensate_latency = true` and [`clap_out`](@ref)
+returns the aligned stream instead — the plugin's first `clap_latency()` output samples are
+discarded, output block `k` corresponds to input block `k`, and [`clap_flush!`](@ref) yields
+the tail at end of stream. [`clap_compensating`](@ref) says which mode is in force. Under the
+mode every processed block must be read once, in order — a skipped block would silently
+misalign the stream, so it is an error rather than an empty read — and a plugin that changes
+its latency mid-stream errors on the next read.
 
-Tracked as [issue #9](https://github.com/SciML/AudioPlugins.jl/issues/9).
+The `ap.lookahead` test plugin keeps both honest: its reported latency is real, and the
+tests assert that it is surfaced by default and compensated under the mode, sample-exactly.
+
+This was tracked as [issue #9](https://github.com/SciML/AudioPlugins.jl/issues/9).
 
 ## Contiguity is unchecked
 

@@ -145,6 +145,7 @@ else
             clap_open!(BUNDLE; plugin_id = "ap.lookahead", block_size = 64)
             @test clap_latency() == 16.0
             @test clap_param_count() == 0        # lookahead exposes no parameters
+            @test !clap_compensating()           # off by default
             # The delay is real: a unit impulse comes out 16 samples later.
             imp = zeros(64); imp[1] = 1.0
             t = clap_fill!(imp)
@@ -152,6 +153,136 @@ else
             y = clap_out(o)
             @test y[17] ≈ 1.0                   # 1-based: sample 16 -> index 17
             @test all(abs.(y[[1:16; 18:64]]) .< 1.0e-9)
+            # And without the mode, a read still yields the whole raw block.
+            @test length(y) == 64
+        end
+
+        @testset "opt-in latency compensation aligns the stream" begin
+            # A signal with no block-period symmetry, so a misalignment of even
+            # one sample shows up in the comparison.
+            clap_open!(
+                BUNDLE; plugin_id = "ap.lookahead", block_size = 64,
+                compensate_latency = true
+            )
+            @test clap_compensating()
+            @test clap_latency() == 16.0
+            x = [sin(2pi * 13 * i / 256) + 0.3 * cos(2pi * i / 97) for i in 0:255]
+            aligned = Float64[]
+            for k in 0:3
+                o = AP.clp_process(
+                    clap_fill!(x[(k * 64 + 1):((k + 1) * 64)]),
+                    -1, 0, -1, 0, -1, 0, -1, 0
+                )
+                y = clap_out(o)
+                # The lag: 16 samples do not fit in one block, so the first
+                # read has no whole block to give back yet.
+                k == 0 && @test isempty(y)
+                k > 0 && @test length(y) == 64
+                append!(aligned, y)
+            end
+            tail = clap_flush!()
+            @test length(tail) == 64            # the last block arrives on flush
+            @test clap_flush!() == tail          # reads are idempotent
+            append!(aligned, tail)
+            @test length(aligned) == length(x)
+            @test maximum(abs.(aligned .- x)) < 1.0e-6
+
+            # An impulse at input sample j lands at aligned sample j, not j+16.
+            clap_open!(
+                BUNDLE; plugin_id = "ap.lookahead", block_size = 64,
+                compensate_latency = true
+            )
+            imp = zeros(128); imp[1] = 1.0
+            got = Float64[]
+            for k in 0:1
+                o = AP.clp_process(
+                    clap_fill!(imp[(k * 64 + 1):((k + 1) * 64)]),
+                    -1, 0, -1, 0, -1, 0, -1, 0
+                )
+                append!(got, clap_out(o))
+            end
+            append!(got, clap_flush!())
+            @test got[1] ≈ 1.0
+            @test all(abs.(got[2:128]) .< 1.0e-9)
+
+            # A zero-latency plugin under the mode is just the raw stream.
+            clap_open!(
+                BUNDLE; plugin_id = "ap.gain", block_size = 64,
+                compensate_latency = true
+            )
+            o = AP.clp_process(clap_fill!(fill(0.5, 64)), 0, 2.0, -1, 0, -1, 0, -1, 0)
+            @test clap_out(o) ≈ fill(1.0, 64)
+            @test isempty(clap_flush!())
+
+            # Latency larger than the block: the lag is ceil(N/B) blocks.
+            clap_open!(
+                BUNDLE; plugin_id = "ap.lookahead", block_size = 8,
+                compensate_latency = true
+            )
+            x8 = collect(0.0:31.0)
+            got8 = Float64[]
+            for k in 0:3
+                o = AP.clp_process(
+                    clap_fill!(x8[(k * 8 + 1):((k + 1) * 8)]),
+                    -1, 0, -1, 0, -1, 0, -1, 0
+                )
+                y = clap_out(o)
+                k < 2 && @test isempty(y)        # ceil(16/8) = 2 blocks of lag
+                k >= 2 && @test length(y) == 8
+                append!(got8, y)
+            end
+            tail8 = clap_flush!()
+            @test length(tail8) == 16
+            append!(got8, tail8)
+            @test got8 == Float64.(Float32.(x8))   # a delay copies exactly
+        end
+
+        @testset "compensation is per channel, and enforces read-once" begin
+            clap_open!(
+                BUNDLE; plugin_id = "ap.lookahead", block_size = 64,
+                channels = 2, compensate_latency = true
+            )
+            x = collect(0.0:63.0)
+            inter = vec(permutedims([x 2 .* x]))   # interleaved: ch0 = x, ch1 = 2x
+            o1 = AP.clp_process(
+                clap_fill!(inter; channels = 2), -1, 0, -1, 0, -1, 0, -1, 0
+            )
+            @test isempty(clap_out(o1; channel = 0))
+            @test isempty(clap_out(o1; channel = 1))
+            o2 = AP.clp_process(
+                clap_fill!(inter; channels = 2), -1, 0, -1, 0, -1, 0, -1, 0
+            )
+            @test clap_out(o2; channel = 0) ≈ x atol = 1.0e-7
+            @test clap_out(o2; channel = 1) ≈ 2 .* x atol = 1.0e-7
+            @test clap_flush!(; channel = 0) ≈ x atol = 1.0e-7
+            @test clap_flush!(; channel = 1) ≈ 2 .* x atol = 1.0e-7
+
+            # A block processed but never read is a hole in the aligned
+            # stream: loud, not silently misaligned.
+            clap_open!(
+                BUNDLE; plugin_id = "ap.lookahead", block_size = 64,
+                compensate_latency = true
+            )
+            AP.clp_process(clap_fill!(ones(64)), -1, 0, -1, 0, -1, 0, -1, 0)
+            o2 = AP.clp_process(clap_fill!(ones(64)), -1, 0, -1, 0, -1, 0, -1, 0)
+            @test_throws ErrorException clap_out(o2)
+            # Re-reading a stale token errors rather than returning [].
+            clap_open!(
+                BUNDLE; plugin_id = "ap.lookahead", block_size = 64,
+                compensate_latency = true
+            )
+            o1 = AP.clp_process(clap_fill!(ones(64)), -1, 0, -1, 0, -1, 0, -1, 0)
+            clap_out(o1)
+            o2 = AP.clp_process(clap_fill!(ones(64)), -1, 0, -1, 0, -1, 0, -1, 0)
+            clap_out(o2)
+            @test_throws ErrorException clap_out(o1)
+            @test_throws ErrorException clap_out(NaN)
+        end
+
+        @testset "clap_flush! without the mode is an error" begin
+            clap_open!(BUNDLE; plugin_id = "ap.gain", block_size = 64)
+            @test !clap_compensating()
+            @test_throws ErrorException clap_flush!()
         end
 
         @testset "state persists across blocks (the invariant that matters)" begin
