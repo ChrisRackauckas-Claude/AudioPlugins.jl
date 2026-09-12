@@ -121,9 +121,12 @@ AP.clp_out_valid(out)           # 1.0 if `out` is still the current output block
 ```
 
 [`clap_latency`](@ref) reports the latency the plugin declares, in samples. It is
-**not compensated**: hosting a lookahead plugin leaves its output shifted by that many
-samples relative to the input, and a caller that cares must align the stream itself.
-See [Reported latency is surfaced, not compensated](@ref).
+**not compensated by default**: hosting a lookahead plugin leaves its output shifted by
+that many samples relative to the input. `clap_open!` accepts
+`compensate_latency = true`, an opt-in Julia-side mode in which [`clap_out`](@ref)
+returns the aligned stream — output block `k` corresponds to input block `k` — and
+[`clap_flush!`](@ref) yields the tail at end of stream. See
+[Reported latency is surfaced, not compensated, by default](@ref).
 
 ## Generating input node-side
 

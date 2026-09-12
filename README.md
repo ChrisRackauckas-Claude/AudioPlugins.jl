@@ -117,7 +117,8 @@ expectation is arithmetic rather than a recording:
 - `ap.gain` — output equals input times the gain, sample-exactly;
 - `ap.onepole` — two consecutive blocks equal one continuous run over the concatenated
   input, which is what proves state survives block boundaries;
-- `ap.lookahead` — reported latency is real and is surfaced rather than silently absorbed.
+- `ap.lookahead` — reported latency is real and is surfaced rather than silently
+  absorbed (and compensates sample-exactly under `compensate_latency = true`).
 
 ## Authoring: from a step function to a plugin
 
@@ -287,8 +288,11 @@ audio project rather than only this one.
   never blocks and never allocates. A garbage-collected process driving a solver that may
   retry a step cannot promise that. Harmless offline; not harmless on a live capture with a
   deadline.
-- **Reported latency is surfaced, not compensated.** Callers that care must align the
-  stream themselves.
+- **Reported latency is surfaced, not compensated, by default.** `clap_open!` accepts
+  `compensate_latency = true`, an opt-in Julia-side mode that aligns the stream:
+  `clap_out` then returns block k aligned with input block k and `clap_flush!` yields
+  the tail. The C hosts (`csrc/`) stay uncompensated — a generated C program linking
+  them directly never sees the mode.
 
 ## Licence
 

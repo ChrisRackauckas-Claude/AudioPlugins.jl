@@ -55,6 +55,8 @@ AudioPlugins.RegisteredBundle
 clap_block_size
 clap_sample_rate
 clap_latency
+clap_compensating
+clap_flush!
 clap_n_process
 clap_reset_counters!
 ```
