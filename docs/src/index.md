@@ -13,6 +13,10 @@ The package does two things that are inverses of each other:
 
 No plugin GUI is ever loaded, in either direction.
 
+No plugins ship with the package. A collection of third-party effects is a separate
+package you install by name, and [Plugin collections](@ref) is what there is and what it
+is licensed under.
+
 ## Installation
 
 ```julia

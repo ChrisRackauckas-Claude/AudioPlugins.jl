@@ -182,10 +182,10 @@ is a minimal host that saves, loads into a fresh instance, and offers garbage.
 
 ## Adding a format
 
-[`CLAP`](@ref) is the only format that ships here, because it is the only one whose SDK
-can be vendored in a public repository under a permissive licence. A format whose SDK
-cannot subtypes [`PluginFormat`](@ref) out of tree and calls
-[`register_plugin_format!`](@ref); [`plugin_format`](@ref) then looks it up by name.
+[`CLAP`](@ref) is the only format [`export_plugin`](@ref) builds — hosting covers all
+three, authoring covers one. A format that does not ship here is added out of tree:
+subtype [`PluginFormat`](@ref) and call [`register_plugin_format!`](@ref);
+[`plugin_format`](@ref) then looks it up by name.
 
 The five methods a format implements are listed in [`PluginFormat`](@ref)'s docstring, and
 the CLAP implementations of them —

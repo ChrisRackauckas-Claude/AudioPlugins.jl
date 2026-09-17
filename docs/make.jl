@@ -18,6 +18,7 @@ makedocs(
         "index.md",
         "Hosting a plugin" => "hosting.md",
         "Authoring a plugin" => "authoring.md",
+        "Plugin collections" => "collections.md",
         "Known limits" => "limits.md",
         "API" => "api.md",
     ]
