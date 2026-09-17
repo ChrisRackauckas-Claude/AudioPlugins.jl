@@ -18,8 +18,9 @@ concurrency:
 
 jobs:
   # A lane of its own rather than a group in test/test_groups.toml. The suite
-  # compiles its plugins with `cc -m32`, which needs gcc-multilib and the 32-bit
-  # headers, and grouped-tests.yml's `apt-packages` input is workflow-wide:
+  # compiles its plugins with `cc -m32` and the VST3 ones with `c++ -m32`, which
+  # needs the 32-bit C *and* C++ toolchains and headers, and grouped-tests.yml's
+  # `apt-packages` input is workflow-wide:
   # setting it there pins *every* leg to ubuntu-24.04 and so would drop the macOS
   # and Windows lanes. tests.yml installs the i386 runtime by itself whenever
   # julia-arch is x86, so only the cross-compilation toolchain is asked for here.
@@ -31,6 +32,6 @@ jobs:
       group: "All"
       julia-version: "1"
       julia-arch: "x86"
-      apt-packages: "gcc-multilib libc6-dev-i386"
+      apt-packages: "gcc-multilib g++-multilib libc6-dev-i386"
       coverage-directories: "src,ext"
     secrets: "inherit"

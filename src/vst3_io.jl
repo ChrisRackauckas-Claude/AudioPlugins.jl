@@ -128,11 +128,15 @@ function vst3_test_bundle(sdk_root; force::Bool = false)
                 "prebuilt from VST3Host_jll."
         )
         mkpath(inner)
+        pic = Sys.iswindows() ? String[] : ["-fPIC"]
         sce = joinpath(sdk, "public.sdk", "source", "vst", "vstsinglecomponenteffect.cpp")
-        cmd = `$cxx $(_c_arch_flags()) -std=c++17 -O2 -fPIC -shared -fvisibility=hidden -DRELEASE=1 -I$sdk
+        cmd = `$cxx $(_c_arch_flags()) -std=c++17 -O2 $pic -shared -fvisibility=hidden -DRELEASE=1 -I$sdk
                -o $bin $src $sce $main -L$libdir -lsdk -lsdk_common -lbase -lpluginterfaces -lpthread`
+        # funknown.cpp calls CoCreateGuid, which is COM: mingw links kernel32,
+        # user32, advapi32 and shell32 by default but never ole32.
+        Sys.iswindows() && (cmd = `$cmd -lole32`)
         Sys.isapple() && (cmd = `$cmd -framework CoreFoundation`)
-        run(cmd)
+        _run_build(cmd, "vst3_test_bundle")
         # The loader looks for a snapshot/moduleinfo only optionally; a bare
         # binary in the right place is a valid bundle.
     end

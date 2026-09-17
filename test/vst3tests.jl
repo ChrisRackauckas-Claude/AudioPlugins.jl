@@ -174,7 +174,10 @@ const GAIN, POLE, LOOK = AP.VST3_TEST_GAIN, AP.VST3_TEST_ONEPOLE, AP.VST3_TEST_L
     # plugin with a separate controller, a sidechain bus and sample-accurate
     # parameter smoothing, hosted sample-exactly.
     @testset "the SDK's again example" begin
-        @test isdir(AGAIN)
+        # A VST3 module is a directory bundle everywhere except Windows, where
+        # vst3sdk_jll ships this one in the format's other legal shape, a bare
+        # DLL named `.vst3`. Both are loadable; only the layout differs.
+        @test Sys.iswindows() ? isfile(AGAIN) : isdir(AGAIN)
         classes = vst3_scan(AGAIN)
         @test any(c -> c.name == "AGain Sample Accurate", classes)
         again = classes[findfirst(c -> c.name == "AGain Sample Accurate", classes)]
