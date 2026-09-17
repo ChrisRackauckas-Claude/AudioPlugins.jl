@@ -209,6 +209,9 @@ extension instead; the registry does not care which. The `.clap` module is a `Fi
 in the JLL — it is a `.so`/`.dll` on Linux and Windows and a bundle directory on macOS,
 and `FileProduct` covers both.
 
+[Plugin collections](@ref) lists which collections exist, what each is licensed under, and
+what writing a sublibrary for one involves.
+
 ## How the hosts are shipped
 
 The C hosts (`csrc/clap_host.c`, `csrc/lv2_host.c`) are built by
