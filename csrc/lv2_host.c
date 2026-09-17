@@ -98,6 +98,13 @@ static int feature_supported(const char *uri) {
  * 3. State
  * ---------------------------------------------------------------- */
 
+/* Copied, not pointed at: lilv's nodes belong to the world the next scan
+ * frees. */
+typedef struct {
+    char uri[512];
+    char name[256];
+} desc_t;
+
 typedef struct {
     LilvWorld        *world;
     const LilvPlugins *plugins;      /* owned by the world */
@@ -108,10 +115,11 @@ typedef struct {
     double sample_rate;
     long   block, chan;
 
-    /* Descriptor cache from the last scan. */
-    long   n_desc;
-    char   desc_uri[256][512];
-    char   desc_name[256][256];
+    /* Descriptor cache from the last scan, grown to fit what the search path
+     * holds. Allocated at scan time, never in the processing path. */
+    long    n_desc;
+    long    cap_desc;
+    desc_t *desc;
     char   plugin_name[256];
     char   plugin_uri[512];
     char   lv2_path[2048];           /* the path the world was loaded with */
@@ -164,9 +172,27 @@ static const char *node_str(const LilvNode *n) {
     return n ? lilv_node_as_string(n) : "";
 }
 
+/* Not a cap on what a search path may hold -- the cache grows to fit -- but
+ * the point past which an enumeration is a runaway. Reaching it is an error,
+ * never a silent truncation. */
+#define LV2_HOST_SCAN_SANITY 65536
+
+/* Never shrinks, so a large path followed by a small one does not churn. */
+static int grow_desc(long n) {
+    if (n <= S.cap_desc) return 1;
+    long cap = S.cap_desc ? S.cap_desc : 64;
+    while (cap < n) cap *= 2;
+    desc_t *p = (desc_t *)realloc(S.desc, (size_t)cap * sizeof(desc_t));
+    if (!p) return 0;
+    S.desc = p;
+    S.cap_desc = cap;
+    return 1;
+}
+
 long lv2_host_scan(const char *lv2_path) {
     ERR[0] = '\0';
     lv2_host_close();
+    S.n_desc = 0;   /* a failed scan leaves 0, not the previous path's count */
 
     S.world = lilv_world_new();
     if (!S.world) { set_err("lilv_world_new failed"); return -1; }
@@ -179,31 +205,42 @@ long lv2_host_scan(const char *lv2_path) {
     } else {
         S.lv2_path[0] = '\0';
     }
+    const char *where = S.lv2_path[0] ? S.lv2_path : "(default LV2_PATH)";
     lilv_world_load_all(S.world);
     S.plugins = lilv_world_get_all_plugins(S.world);
 
-    S.n_desc = 0;
     LILV_FOREACH (plugins, i, S.plugins) {
-        if (S.n_desc >= 256) break;
+        if (S.n_desc >= LV2_HOST_SCAN_SANITY) {
+            set_err("more than %d LV2 plugins under '%s'; refusing to enumerate further",
+                    LV2_HOST_SCAN_SANITY, where);
+            free_world();
+            S.n_desc = 0;
+            return -1;
+        }
+        if (!grow_desc(S.n_desc + 1)) {
+            set_err("out of memory caching %ld descriptors from '%s'", S.n_desc + 1, where);
+            free_world();
+            S.n_desc = 0;
+            return -1;
+        }
         const LilvPlugin *p = lilv_plugins_get(S.plugins, i);
-        snprintf(S.desc_uri[S.n_desc], sizeof S.desc_uri[0], "%s",
+        snprintf(S.desc[S.n_desc].uri, sizeof S.desc[0].uri, "%s",
                  node_str(lilv_plugin_get_uri(p)));
         LilvNode *name = lilv_plugin_get_name(p);
-        snprintf(S.desc_name[S.n_desc], sizeof S.desc_name[0], "%s", node_str(name));
+        snprintf(S.desc[S.n_desc].name, sizeof S.desc[0].name, "%s", node_str(name));
         lilv_node_free(name);
         S.n_desc++;
     }
     if (S.n_desc == 0) {
-        set_err("no LV2 plugins found under '%s'",
-                (lv2_path && lv2_path[0]) ? lv2_path : "(default LV2_PATH)");
+        set_err("no LV2 plugins found under '%s'", where);
         free_world();
         return -1;
     }
     return S.n_desc;
 }
 
-const char *lv2_host_scan_uri(long i)  { return (i >= 0 && i < S.n_desc) ? S.desc_uri[i]  : ""; }
-const char *lv2_host_scan_name(long i) { return (i >= 0 && i < S.n_desc) ? S.desc_name[i] : ""; }
+const char *lv2_host_scan_uri(long i)  { return (i >= 0 && i < S.n_desc) ? S.desc[i].uri  : ""; }
+const char *lv2_host_scan_name(long i) { return (i >= 0 && i < S.n_desc) ? S.desc[i].name : ""; }
 
 /* ---------------------------------------------------------------- *
  * 5. Open / close
@@ -248,14 +285,14 @@ int lv2_host_open(const char *lv2_path, const char *uri,
         return 1;
     }
 
-    const char *want = (uri && uri[0]) ? uri : S.desc_uri[0];
+    const char *want = (uri && uri[0]) ? uri : S.desc[0].uri;
     LilvNode *want_node = lilv_new_uri(S.world, want);
     const LilvPlugin *p = want_node ? lilv_plugins_get_by_uri(S.plugins, want_node) : NULL;
     lilv_node_free(want_node);
     if (!p) {
         set_err("no plugin with URI '%s' under '%s' (found %ld: first is '%s')",
                 want, S.lv2_path[0] ? S.lv2_path : "(default LV2_PATH)",
-                S.n_desc, S.desc_uri[0]);
+                S.n_desc, S.desc[0].uri);
         fail_open();
         return 1;
     }

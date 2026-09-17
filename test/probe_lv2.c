@@ -4,6 +4,7 @@
  *   cc -O2 -o /tmp/probe_lv2 test/probe_lv2.c csrc/lv2_host.c \
  *       -Icsrc/vendor $(pkg-config --cflags --libs lilv-0) -lm
  *   /tmp/probe_lv2 <dir containing ap_test.lv2> [<a real LV2 dir, e.g. /usr/lib/lv2>]
+ *                                               [<dir containing ap_many.lv2>]
  */
 #include "../csrc/lv2_host.h"
 #include <math.h>
@@ -15,6 +16,9 @@ static void ck(int ok, const char *what) {
     printf("%-62s %s\n", what, ok ? "ok" : "FAIL");
     if (!ok) fails++;
 }
+
+/* Must match AP_MANY_LV2_N in test/plugins/ap_test_many_lv2.c. */
+#define MANY_N 300
 
 #define GAIN "urn:audioplugins:test:gain"
 #define POLE "urn:audioplugins:test:onepole"
@@ -125,6 +129,38 @@ int main(int argc, char **argv) {
         } else {
             printf("   eg-amp not opened: %s\n", lv2_host_last_error());
         }
+        lv2_host_close();
+    }
+
+    if (argc > 3) {   /* a search path holding more plugins than any fixed cache */
+        const char *MANY = argv[3];
+        long m = lv2_host_scan(MANY);
+        ck(m == MANY_N, "scan finds all 300 plugins, not a capped 256");
+        if (m < 0) printf("   error: %s\n", lv2_host_last_error());
+
+        static char seen[MANY_N];
+        int unparsed = 0, repeated = 0, missing = 0;
+        for (long i = 0; i < m; i++) {
+            int k = -1;
+            if (sscanf(lv2_host_scan_uri(i), "urn:audioplugins:test:many:%d", &k) != 1
+                || k < 0 || k >= MANY_N) unparsed++;
+            else if (seen[k]++) repeated++;
+        }
+        for (int k = 0; k < MANY_N; k++) if (!seen[k]) missing++;
+        ck(unparsed == 0 && repeated == 0 && missing == 0,
+           "  every one of the 300 URIs enumerated exactly once");
+        if (missing) printf("   %d of %d URIs never appeared\n", missing, MANY_N);
+        ck(strcmp(lv2_host_scan_uri(MANY_N), "") == 0, "  one past the end is empty");
+
+        /* Plugin N scales by N+1, so the audio says which one was opened. */
+        ck(lv2_host_open(MANY, "urn:audioplugins:test:many:299", 48000, 64, 1) == 0,
+           "  open the three-hundredth plugin");
+        double tm = lv2_in_fill(step, 64, 1);
+        double om = lv2_process(tm, 0, 1.0, -1, 0, -1, 0, -1, 0);
+        ck(fabs(lv2_out_peak(om) - 300.0) < 1e-3, "  and it is the one that scales by 300");
+
+        ck(lv2_host_scan(DIR) == 3, "  rescanning the small bundle finds 3 again");
+        ck(strcmp(lv2_host_scan_uri(3), "") == 0, "  with nothing left over from the big one");
         lv2_host_close();
     }
 
