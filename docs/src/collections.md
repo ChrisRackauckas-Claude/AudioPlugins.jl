@@ -26,10 +26,10 @@ preference, for the reason given under
 | Airwindows — 504 effects | [baconpaul/airwin2rack](https://github.com/baconpaul/airwin2rack), `airwin-registry` target | MIT | CLAP adapter and sublibrary in this repository; **`Airwindows_jll` is not yet in the General registry**, so the package does not resolve yet |
 | Pitch shift / time stretch | [signalsmith-stretch](https://github.com/Signalsmith-Audio/signalsmith-stretch) | MIT | Proposed — a DSP library, so it needs an adapter before it is a plugin at all |
 | Convolution | [HiFi-LoFi/FFTConvolver](https://github.com/HiFi-LoFi/FFTConvolver) | MIT | Proposed — likewise a library |
-| LSP Plugins | [lsp-plugins](https://github.com/lsp-plugins/lsp-plugins) | LGPL-3.0 | Proposed |
-| Dragonfly Reverb | [dragonfly-reverb](https://github.com/michaelwillis/dragonfly-reverb) | GPL-3.0 | Proposed |
-| ZamPlugins | [zam-plugins](https://github.com/zamaudio/zam-plugins) | GPL-2.0 | Proposed |
-| x42-plugins | [x42-plugins](https://github.com/x42/x42-plugins) | none at the repository level — a meta-repo of submodules, each carrying its own | Proposed |
+| LSP Plugins — 198 plugins | [lsp-plugins](https://github.com/lsp-plugins/lsp-plugins) | LGPL-3.0-or-later | Recipe ([Yggdrasil #14829](https://github.com/JuliaPackaging/Yggdrasil/pull/14829)) and sublibrary open; **`LSPPlugins_jll` is not yet in the General registry**, so the package does not resolve yet |
+| Dragonfly Reverb | [dragonfly-reverb](https://github.com/michaelwillis/dragonfly-reverb) | GPL-3.0-or-later | Recipe ([Yggdrasil #14828](https://github.com/JuliaPackaging/Yggdrasil/pull/14828)) and sublibrary open; **`DragonflyReverb_jll` is not yet in the General registry**, so the package does not resolve yet |
+| ZamPlugins | [zam-plugins](https://github.com/zamaudio/zam-plugins) | GPL-2.0-or-later for the sixteen plugins packaged; the upstream repository is not uniformly so (see below) | Recipe ([Yggdrasil #14832](https://github.com/JuliaPackaging/Yggdrasil/pull/14832)) and sublibrary open; **`ZamPlugins_jll` is not yet in the General registry**, so the package does not resolve yet |
+| x42-plugins | [x42-plugins](https://github.com/x42/x42-plugins) | none at the repository level — a meta-repo of submodules, each carrying its own (see below) | Investigated and not packaged: of the 54 plugins that build headless, this package's LV2 host can open 3 — see [Why x42-plugins is not packaged](@ref) |
 
 "Proposed" means exactly that: no recipe, no JLL, no sublibrary, and no commitment that
 one is coming. It is the list from
@@ -46,11 +46,38 @@ what it links, which is why the Airwindows row is MIT even though its upstream
 repository also contains GPL3 material. **When a JLL exists, the JLL is the authority**
 — read its licence, not this table.
 
-Two entries in issue #39's own table do not match what upstream declares, and are
-corrected above rather than propagated: lsp-plugins is LGPL-3.0 (its README says "GNU
-Lesser Public License v3"), not GPLv3; and x42-plugins declares no repository-level
-licence at all, being a meta-repository of per-plugin submodules, so "GPLv2" cannot be
-asserted for the collection as a whole without going submodule by submodule.
+Every identifier above is spelled `-or-later` where the upstream headers say "either
+version N ... or (at your option) any later version". This is not pedantry:
+`GPL-3.0-only` and `GPL-3.0-or-later` are materially different grants, and the bare
+`GPL-3.0` form is deprecated in SPDX precisely because it does not say which is meant.
+
+Three entries in issue #39's own table do not match what upstream declares, and are
+corrected above rather than propagated. lsp-plugins is LGPL-3.0-or-later (its README
+says "GNU Lesser Public License v3"), not GPLv3. x42-plugins declares no
+repository-level licence at all, being a meta-repository of per-plugin submodules: at
+pin `3fb6abe`, 20 of its 25 submodules are GPL-2.0-or-later throughout while 5 contain
+GPL-3.0-or-later code, so no single label is correct for the collection, though nothing
+in it is GPL-2.0-*only* and so nothing is incompatible. And zam-plugins is
+GPL-2.0-or-later only for what is packaged here: `ZamVerb` and `ZamHeadX2` link a
+bundled zita-convolver 4.0.0 which is GPL-3.0-or-later, so both are deliberately
+excluded from the JLL to keep the single label true rather than approximate.
+
+### Why x42-plugins is not packaged
+
+The licensing resolves and 14 of its submodules build headless, producing 54 plugins that
+`lv2_scan` enumerates correctly. It is not packaged because the result would not be usable:
+of those 54, this package's LV2 host can open **three**. Forty-one need atom ports — that
+is all of the MIDI tooling — nine expose too few audio outputs for a two-channel host, and
+one needs `worker:schedule`.
+
+The two components [issue #39](https://github.com/SciML/AudioPlugins.jl/issues/39) names
+are unavailable for unrelated reasons: `fil4`, the parametric EQ, does not compile headless
+because its DSP includes `cairo.h` for the inline-display extension, and `meters` is in the
+GPL-3.0-or-later tier rather than the GPL-2.0-or-later one.
+
+So the blocker is atom-port support in `csrc/lv2_host.c`, not a missing recipe. Once the
+host can carry atom ports, x42 becomes worth packaging — most likely as two JLLs, split by
+licence tier.
 
 ### Airwindows
 
