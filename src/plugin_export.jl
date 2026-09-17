@@ -299,6 +299,9 @@ Optional:
   * `inputs` — the step arguments before `pars`, as [`StepInput`](@ref)s;
     default one `:audio` input. Exactly one must be `:audio`;
   * `output` — the field of `<base>_out` carrying the sample, default `"y"`;
+  * `latency` — the step function's own processing latency in samples (a
+    lookahead, say), reported to the host. Default `0`; the wrapper reports
+    it and never introduces it;
   * `sub_clock` — `true` when the output is on a clock slower than the
     sample clock: `<base>_out` then also carries a `bool has_<output>`
     presence flag, and on a sample where it is false the wrapper holds the
@@ -325,6 +328,7 @@ struct PluginSpec
     inputs::Vector{StepInput}
     output::String
     sub_clock::Bool
+    latency::Int
     sample_rate_field::Union{Nothing, String}
     params::Vector{PluginParam}
     constants::Vector{Pair{String, Any}}
@@ -338,12 +342,13 @@ function PluginSpec(;
         vendor = "", version = "0.0.0", description = "", url = "",
         features = ["audio-effect"], channels::Integer = 2,
         inputs = [StepInput("u", :audio)], output = "y", sub_clock::Bool = false,
-        sample_rate_field = nothing, params = PluginParam[],
+        latency::Integer = 0, sample_rate_field = nothing, params = PluginParam[],
         constants = Pair{String, Any}[]
     )
     isempty(id) && throw(ArgumentError("plugin id must not be empty"))
     isempty(name) && throw(ArgumentError("plugin name must not be empty"))
     1 <= channels <= 64 || throw(ArgumentError("channels must be in 1..64, got $channels"))
+    latency >= 0 || throw(ArgumentError("latency must be a non-negative number of samples, got $latency"))
     _check_c_ident(base, "ABI base name")
     _check_c_ident(output, "output field")
     sample_rate_field === nothing || _check_c_ident(sample_rate_field, "sample_rate_field")
@@ -375,7 +380,7 @@ function PluginSpec(;
     return PluginSpec(
         String(id), String(name), String(vendor), String(version),
         String(description), String(url), String[features...], Int(channels),
-        String(base), String(pars), inputs, String(output), sub_clock,
+        String(base), String(pars), inputs, String(output), sub_clock, Int(latency),
         sample_rate_field === nothing ? nothing : String(sample_rate_field),
         params, consts, step
     )
@@ -385,7 +390,7 @@ end
 _with_pars(s::PluginSpec, pars::AbstractString) =
     PluginSpec(
     s.id, s.name, s.vendor, s.version, s.description, s.url, s.features, s.channels,
-    s.base, String(pars), s.inputs, s.output, s.sub_clock, s.sample_rate_field,
+    s.base, String(pars), s.inputs, s.output, s.sub_clock, s.latency, s.sample_rate_field,
     s.params, s.constants, s.step
 )
 
@@ -418,6 +423,7 @@ pars = "ExGainPars"           # the parameter struct declared in the C header (C
 inputs = [{ name = "u", role = "audio" }, { name = "clock", role = "clock" }]
 output = "y"                  # field of ex_gain_out; optional, default "y"
 sub_clock = false             # optional: true if ex_gain_out also carries `bool has_y`
+latency = 0                   # optional: the step's own latency in samples
 sample_rate_field = "fs"      # optional
 
 [build]                       # a C step ...
@@ -497,6 +503,7 @@ function read_plugin_spec(path::AbstractString)
         base = abi["base"], pars = get(abi, "pars", ""), step,
         inputs = isempty(inputs) ? [StepInput("u", :audio)] : inputs,
         output = get(abi, "output", "y"), sub_clock = get(abi, "sub_clock", false),
+        latency = get(abi, "latency", 0),
         sample_rate_field = get(abi, "sample_rate_field", nothing),
         params, constants = collect(get(d, "constants", Dict{String, Any}()))
     )
@@ -847,6 +854,7 @@ function _clap_substitutions(spec::PluginSpec)
         "PARS" => spec.pars,
         "CHANNELS" => string(spec.channels),
         "N_PARAMS" => string(length(spec.params)),
+        "LATENCY" => string(spec.latency),
         "FEATURES" => join((_c_string(f) * "," for f in spec.features), " "),
         "ID" => _c_string(spec.id),
         "NAME" => _c_string(spec.name),

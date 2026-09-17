@@ -35,6 +35,7 @@ include("lv2_io.jl")
 include("vst3_io.jl")
 include("bundles.jl")
 include("plugin_export.jl")
+include("lv2_export.jl")
 
 # The bundle registry is runtime state -- a package extension fills it when
 # its JLL loads. Emptied here so that nothing a precompilation happened to

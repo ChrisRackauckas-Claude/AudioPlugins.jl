@@ -26,6 +26,13 @@ os = ["ubuntu-latest", "macos-latest", "windows-latest"]
 versions = ["lts", "1"]
 os = ["ubuntu-latest", "macos-latest", "windows-latest"]
 
+# Authoring LV2: build .lv2 bundles from the C step fixtures, then discover
+# and host them through lilv, so the generated Turtle is checked by reading it
+# back out of lilv rather than by matching the text.
+[LV2Export]
+versions = ["lts", "1"]
+os = ["ubuntu-latest", "macos-latest", "windows-latest"]
+
 # clap.state save/load, driven through the C probe rather than the Julia host.
 [State]
 versions = ["lts", "1"]
