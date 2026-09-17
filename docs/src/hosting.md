@@ -209,15 +209,16 @@ extension instead; the registry does not care which. The `.clap` module is a `Fi
 in the JLL — it is a `.so`/`.dll` on Linux and Windows and a bundle directory on macOS,
 and `FileProduct` covers both.
 
-## How the host is shipped
+## How the hosts are shipped
 
-The C host (`csrc/clap_host.c`) is built by
+The C hosts (`csrc/clap_host.c`, `csrc/lv2_host.c`) are built by
 [Yggdrasil](https://github.com/JuliaPackaging/Yggdrasil) and shipped prebuilt as
-`CLAPHost_jll`, so hosting needs no C toolchain and writes nothing into the package
-directory. The sources stay in the repository anyway, because a generated standalone C
-program links `clap_host.c` directly with no Julia present:
-[`clap_lib_path`](@ref) gives the prebuilt library's absolute path and
-[`clap_src_path`](@ref) the source it was built from.
+`CLAPHost_jll` and `LV2Host_jll`, so hosting needs no C toolchain and writes nothing into
+the package directory. The sources stay in the repository anyway, because a generated
+standalone C program links them directly with no Julia present:
+[`clap_lib_path`](@ref) / [`lv2_lib_path`](@ref) give the prebuilt libraries' absolute
+paths and [`clap_src_path`](@ref) / [`lv2_src_path`](@ref) the sources they were built
+from.
 
 [`clap_host_available`](@ref) says whether the JLL has a build for this platform.
 `CLAPHost_jll` 1.0.1 builds for Linux, macOS and Windows, so in-process hosting runs on
@@ -245,7 +246,8 @@ self-contained and exports only its `extern "C"` surface.
 
 ## Testing without third-party binaries
 
-`test/plugins/ap_test_plugins.c` is a CLAP bundle written for this repository. Hosting is
+`test/plugins/ap_test_plugins.c` is a CLAP bundle written for this repository, and
+`test/plugins/ap_test_lv2.c` the same three plugins as an LV2 bundle. Hosting is
 only proved by hosting something, and depending on a third-party plugin would make the
 suite rest on a binary whose arithmetic cannot be checked and may not even be fetchable.
 Because these are ours, every expectation is arithmetic rather than a recording:
@@ -307,24 +309,52 @@ module and [`plugins`](@ref) reports what CLAP declares. Name the bundle path at
 
 ## LV2 discovery goes through lilv
 
-LV2 metadata — which port index is audio in, which is a control and what its range is —
-lives in Turtle/RDF manifests next to the binary rather than in the binary, which in
-practice means `lilv`. `csrc/lv2_host.c` uses it, and does rather more than the audio
-path:
+LV2 metadata lives in Turtle manifests next to the binary, so discovery means reading
+RDF. This host reads it through [lilv](https://gitlab.com/lv2/lilv), the reference
+reader, rather than a hand-rolled parser that could silently mis-map a port — and
+`LV2Host_jll` brings lilv, `serd`, `sord`, `sratom` and `zix` with it, so nothing needs
+installing by hand.
 
-  - `lv2_host_scan(lv2_path)` loads every bundle under a search path and enumerates the
-    plugins, readable back by URI and name;
-  - `lv2_host_open(lv2_path, uri, …)` classifies every port with `lilv_port_is_a`, reads
-    control ranges out of the manifest, finds the designated `lv2:latency` port, and
-    connects every port itself — so a caller names a plugin by URI and never sees a port
-    index;
-  - a plugin that requires a host feature this host does not provide, or an atom, CV or
-    event port that is not `connectionOptional`, is refused at open with a message saying
-    which. An unconnected required port is undefined behaviour in the LV2 spec, so
-    refusing is the honest answer.
+A search path is a list of directories joined by the platform's separator.
+[`lv2_default_path`](@ref) builds one and appends the LV2 specification bundles from
+`lv2_jll`, which is what gives lilv the vocabulary to classify what it finds:
 
-Every JLL that needs exists today — `Lilv_jll`, `Serd_jll`, `Sord_jll`, `Sratom_jll`,
-`lv2_jll` and `Zix_jll` — so nothing about the format is blocked. The Julia layer over
-this host is not on `main` yet; until it is, LV2 is reached the way `test/probe_lv2.c`
-reaches it, from C linking `csrc/lv2_host.c` against lilv, which the `C probes` workflow
-runs on every pull request.
+```julia
+using AudioPlugins
+
+path = lv2_default_path("/usr/lib/lv2")
+lv2_scan(path)
+# Vector{@NamedTuple{uri::String, name::String}}, one entry per plugin lilv found
+```
+
+A plugin is named by URI rather than by an id local to a bundle, so
+[`lv2_open!`](@ref) takes the search path and the URI:
+
+```julia
+lv2_open!(path; uri = "http://lv2plug.in/plugins/eg-amp", block_size = 64, channels = 1)
+
+lv2_plugin_name()
+lv2_params()   # control input ports: id (= port index), name, symbol, min, max, default
+```
+
+`id` is the port index, and [`lv2_param_value`](@ref) and the `lv2_fill!` /
+[`lv2_out`](@ref) pair work exactly as their CLAP counterparts do — same token
+discipline, same fixed block size, same one-plugin-at-a-time lifecycle.
+[`lv2_latency`](@ref) reports the plugin's designated `lv2:latency` port and is
+surfaced rather than compensated; the opt-in `compensate_latency` mode
+[`clap_open!`](@ref) offers has no LV2 counterpart.
+
+The host offers four features — `urid:map`, `urid:unmap`, `bufsz:fixedBlockLength` and
+`bufsz:boundedBlockLength` — and connects audio and control ports. A plugin that
+*requires* anything else (an atom, CV or event port, or another host feature) is refused
+at [`lv2_open!`](@ref) with a message naming what it asked for. An unconnected required
+port is undefined behaviour in the LV2 specification, so refusing is the honest answer;
+a plugin whose extras are optional opens fine.
+
+[`lv2_test_bundle`](@ref) compiles the same three test plugins as an LV2 bundle, so the
+LV2 path is proved against arithmetic that can be checked rather than against a
+third-party binary.
+
+The bundle registry above is CLAP-only: [`register_bundle!`](@ref) scans a `.clap`
+module, and an LV2 search path — a list of directories rather than one module — does not
+fit that shape. Name the search path at [`lv2_open!`](@ref) instead.
