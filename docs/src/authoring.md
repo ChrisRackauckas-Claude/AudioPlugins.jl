@@ -27,21 +27,40 @@ straight into the struct fields the descriptor names.
   2. A **descriptor** — a [`PluginSpec`](@ref), usually read from a TOML file with
      [`read_plugin_spec`](@ref) — saying what the plugin is called, what its ABI base
      name is, and which struct fields are parameters.
-  3. A **format**, [`CLAP`](@ref) by default.
+  3. A **format**: [`CLAP`](@ref) (the default), [`LV2`](@ref) or [`VST3`](@ref).
 
 ```julia
-using AudioPlugins
+using AudioPlugins, vst3sdk_jll
 spec = read_plugin_spec("my_fx.toml")
-export_plugin(spec, "MyGain.clap")
+export_plugin(spec, "MyGain.clap")                                        # CLAP
+export_plugin(spec, "MyGain.lv2";  format = LV2())                        # LV2
+export_plugin(spec, "MyGain.vst3"; format = VST3(vst3sdk_jll.artifact_dir))   # VST3
 ```
 
-The output is a plain, royalty-free bundle with no licence machinery embedded in it: a
-`.clap` shared object on Linux and Windows, a `Name.clap/Contents/MacOS/Name` directory
-on macOS. On Linux and macOS a C-step bundle can be hosted from the same session that
-built it — [`clap_open!`](@ref) will load it like any other plugin.
+One descriptor, three bundles. The output is always a plain, royalty-free bundle with no
+licence machinery embedded in it:
 
-Authoring needs a C compiler (`cc`, `gcc` or `clang` on `PATH`, or `compiler = "..."`).
-Hosting does not.
+| Format | Bundle | The SDK | Also needs |
+|---|---|---|---|
+| [`CLAP`](@ref) | a `.clap` shared object on Linux and Windows, `Name.clap/Contents/MacOS/Name` on macOS | vendored, MIT, header-only | — |
+| [`LV2`](@ref) | a `Name.lv2` directory holding the binary, `manifest.ttl` and `Name.ttl`, on every platform | vendored, ISC, header-only | — |
+| [`VST3`](@ref) | `Name.vst3/Contents/<arch>-linux/Name.so`, `Name.vst3/Contents/MacOS/Name`, and a bare DLL named `Name.vst3` on Windows | **not vendored**: passed in from `vst3sdk_jll`, MIT since SDK 3.8 | a C++ compiler |
+
+A C-step bundle can be hosted from the same session that built it — [`clap_open!`](@ref),
+[`lv2_open!`](@ref) or [`vst3_open!`](@ref) will load it like any other plugin, wherever
+the matching host JLL has a build for the platform ([`clap_host_available`](@ref)).
+
+Authoring needs a C compiler (`cc`, `gcc` or `clang` on `PATH`, or `compiler = "..."`);
+VST3 additionally needs a C++ compiler (`c++`, `g++` or `clang++`), because its wrapper is
+C++ against the SDK. Hosting needs neither.
+
+A descriptor's `latency` — the step function's own processing latency in samples, a
+lookahead say — is reported by every format: through `clap.latency`, on LV2's designated
+`lv2:latency` port, and from VST3's `IAudioProcessor::getLatencySamples`. The wrapper
+reports that latency and never introduces any of its own.
+
+Only CLAP takes a Julia step. LV2 and VST3 build a [`CStep`](@ref) only, and refuse a
+[`JuliaStep`](@ref) before building anything rather than half-building one.
 
 ## A C step
 
@@ -140,6 +159,7 @@ name = "Example Gain"
 [abi]
 base = "my_fx"                # my_fx_step, my_fx_reset, my_fx_mem, my_fx_out
 pars = "MyPars"               # the C header's parameter struct (C step only)
+latency = 0                   # optional: the step's own latency in samples, reported to the host
 sample_rate_field = "fs"      # optional: the host's rate lands in pars->fs on activate
 
 [build]
@@ -176,18 +196,42 @@ blocks like everything else.
 
 ## State
 
-The wrapper implements `clap.state`, so a DAW session reloads with the parameter values it
-was saved with: a small little-endian blob of `(id, value)` pairs. `test/export/probe_state.c`
-is a minimal host that saves, loads into a fresh instance, and offers garbage.
+A CLAP wrapper implements `clap.state` and a VST3 wrapper `IComponent::getState` /
+`setState`, so a DAW session reloads with the parameter values it was saved with. Both
+write the same small little-endian blob — a magic, a version, and `(id, value)` pairs —
+CLAP's in plain units and VST3's normalised, as each format's parameters are.
+`test/export/probe_state.c` is a minimal CLAP host that saves, loads into a fresh
+instance, and offers garbage; `test/export/probe_vst3_state.cpp` does the same for VST3 by
+linking the rendered wrapper and calling its factory directly.
+
+An LV2 bundle carries no state: an LV2 host restores a plugin by writing its control
+ports, which it already knows from the Turtle.
 
 ## Adding a format
 
-[`CLAP`](@ref) is the only format [`export_plugin`](@ref) builds — hosting covers all
-three, authoring covers one. A format that does not ship here is added out of tree:
-subtype [`PluginFormat`](@ref) and call [`register_plugin_format!`](@ref);
-[`plugin_format`](@ref) then looks it up by name.
+[`CLAP`](@ref), [`LV2`](@ref) and [`VST3`](@ref) all ship here, so hosting and authoring
+now cover the same three formats. A fourth is added out of tree: subtype
+[`PluginFormat`](@ref) and call [`register_plugin_format!`](@ref); [`plugin_format`](@ref)
+then looks it up by name.
 
-The five methods a format implements are listed in [`PluginFormat`](@ref)'s docstring, and
-the CLAP implementations of them —
+The five methods a format implements are listed in [`PluginFormat`](@ref)'s docstring:
+[`AudioPlugins.format_name`](@ref), [`AudioPlugins.bundle_extension`](@ref),
 [`AudioPlugins.emit_wrapper`](@ref), [`AudioPlugins.place_library`](@ref) and
-[`AudioPlugins.runtime_layout`](@ref) — are the worked example.
+[`AudioPlugins.runtime_layout`](@ref). The three in-tree formats are three worked examples
+of them, and between them they show what the seam has to carry:
+
+  - **CLAP** is the plain case: a C wrapper, one shared object, and the only format that
+    also implements `runtime_layout` for real, because it is the only one that takes a
+    [`JuliaStep`](@ref).
+  - **LV2** puts the substance in `place_library`: the binary is only half a bundle, and
+    the generated Turtle beside it is what a host actually reads.
+  - **VST3** puts it in `emit_wrapper`, whose return value carries four optional fields
+    besides `sources` and `include_dirs` — `language` (`:c`, the default, or `:cxx`, which
+    compiles *and links* the wrapper with the C++ compiler), `support_sources` (sources
+    compiled without `-Werror`, here the SDK's own), `compile_flags` and `link_flags`. The
+    step function is compiled as C whatever the wrapper's language, so a C++ wrapper links
+    against a C step rather than mangling its name.
+
+A format that builds a C step only says so by defining `runtime_layout` and
+`AudioPlugins._export_julia_step` to refuse: [`export_plugin`](@ref) dispatches to the
+latter before it builds anything, so the refusal costs nothing and leaves nothing behind.

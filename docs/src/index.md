@@ -31,11 +31,15 @@ and to author your own ([`export_plugin`](@ref)).
 
 ## Formats
 
-| Format | Licence | State |
-|---|---|---|
-| **CLAP** | MIT, header-only | host implemented and tested — discovery, instantiation, parameters, block processing, latency. The one format [`export_plugin`](@ref) builds. |
-| **LV2** | ISC | host implemented and tested — discovery through lilv, instantiation, parameters, block processing, latency. See [LV2 discovery goes through lilv](@ref) |
-| **VST3** | MIT since SDK 3.8 | host implemented and tested — discovery, instantiation, parameters, block processing, latency. See [VST3](@ref) |
+All three are implemented and tested in both directions: hosted — discovery,
+instantiation, parameters, block processing, latency — and built by
+[`export_plugin`](@ref) from a step function.
+
+| Format | Licence | Hosting | Authoring |
+|---|---|---|---|
+| **CLAP** | MIT, header-only, vendored | yes | yes, from a C step or a [`JuliaStep`](@ref) |
+| **LV2** | ISC, vendored | yes, discovery through lilv. See [LV2 discovery goes through lilv](@ref) | yes, from a C step: binary plus generated Turtle |
+| **VST3** | MIT since SDK 3.8, from `vst3sdk_jll` | yes. See [VST3](@ref) | yes, from a C step; needs a C++ compiler and the SDK |
 
 ## The processing contract
 

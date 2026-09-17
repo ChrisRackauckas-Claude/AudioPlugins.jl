@@ -10,6 +10,8 @@ const AP = AudioPlugins
 
 const FIX = joinpath(@__DIR__, "export")
 
+include(joinpath(FIX, "reference.jl"))
+
 # The generated header asserts Julia's own `sizeof`, and that is not the same on
 # every target: i686 aligns Float64 to 4, x86_64 to 8, so JlGainPars is 12 bytes
 # on one and 16 on the other. Mirror the struct instead of hardcoding either.
@@ -17,30 +19,6 @@ struct JlGainParsLayout
     gain::Float64
     bypass::Bool
 end
-
-# The reference recursion, written the way fx_eq.c writes it so the only
-# difference is the host's float32 sample storage.
-function rbj_peaking(x, fs, f0, q, gain_db)
-    A = 10.0^(gain_db / 40)
-    w0 = 2pi * f0 / fs
-    alpha = sin(w0) / (2q)
-    cw = cos(w0)
-    b0, b1, b2 = 1 + alpha * A, -2cw, 1 - alpha * A
-    a0, a1, a2 = 1 + alpha / A, -2cw, 1 - alpha / A
-    x1 = x2 = y1 = y2 = 0.0
-    y = similar(x)
-    for i in eachindex(x)
-        y[i] = (b0 / a0) * x[i] + (b1 / a0) * x1 + (b2 / a0) * x2 - (a1 / a0) * y1 - (a2 / a0) * y2
-        x2, x1 = x1, x[i]
-        y2, y1 = y1, y[i]
-    end
-    return y
-end
-
-# Inputs that are exactly representable as float32, so that an exact
-# comparison against the host's float32 buffers means what it says.
-f32(x) = Float64.(Float32.(x))
-signal(n) = f32([0.4sin(2pi * 0.013i) + 0.3sin(2pi * 0.171i) for i in 0:(n - 1)])
 
 # On Windows a Julia step ships its runtime (the .clap is a shim over
 # Name.clap.runtime\bin, see the extension), so the fixtures are bundled
@@ -239,17 +217,6 @@ end
     end
 
     probe_suite("C step", gain_spec, gain, eq)
-
-    # A held sample-and-hold: y[i] = gain * x[k] for the latest k <= i with k % d == 0.
-    function decimate_hold(x, d, gain)
-        y = similar(x)
-        held = 0.0
-        for (i, v) in enumerate(x)
-            (i - 1) % d == 0 && (held = gain * v)
-            y[i] = held
-        end
-        return y
-    end
 
     decim_spec = read_plugin_spec(joinpath(FIX, "fx_decim.toml"))
     decim = export_plugin(decim_spec, joinpath(dir, "fx_decim.clap"))

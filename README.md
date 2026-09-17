@@ -30,13 +30,14 @@ lv2_open!(path; uri = "http://lv2plug.in/plugins/eg-amp", block_size = 64)
 lv2_params()                              # control ports: id, name, symbol, range
 ```
 
-Three formats:
+Three formats, in both directions — each is hosted (discovery, instantiation, parameters,
+block processing, latency) and built by `export_plugin` from a step function:
 
-| Format | Licence | State |
-|---|---|---|
-| **CLAP** | MIT, header-only | host implemented and tested — discovery, instantiation, parameters, block processing, latency |
-| **LV2** | ISC | host implemented and tested — discovery through lilv, instantiation, parameters, block processing, latency |
-| **VST3** | MIT since SDK 3.8 | host implemented and tested — discovery, instantiation, parameters, block processing, latency |
+| Format | Licence | Hosting | Authoring |
+|---|---|---|---|
+| **CLAP** | MIT, header-only, vendored | implemented and tested | from a C step or a Julia step |
+| **LV2** | ISC, vendored | implemented and tested, discovery through lilv | from a C step: binary plus generated Turtle |
+| **VST3** | MIT since SDK 3.8, from `vst3sdk_jll` | implemented and tested | from a C step; needs a C++ compiler and the SDK |
 
 ## How the hosts are shipped
 
@@ -225,6 +226,10 @@ export_plugin(spec, "MyGain.clap")             # a .clap on Linux/Windows, a bun
 clap_open!("MyGain.clap"; block_size = 64)      # and host it, right here (C steps)
 ```
 
+The same descriptor builds all three formats — `export_plugin` dispatches on the format,
+and the wrapper, the bundle layout and the metadata are the format's business, not the
+step function's.
+
 The same descriptor also builds LV2:
 
 <!-- illustrative -->
@@ -250,9 +255,39 @@ than implementation details:
 The generated bundle requires no host feature. LV2 authoring builds a C step only; a
 `JuliaStep` is refused rather than half-built.
 
-The same package hosts what it builds, so `test/export_tests.jl` proves the seam with
-hand-written step functions under `test/export/` in both C and Julia and no generator
-anywhere: a gain that is sample-exact at 0.5, and an RBJ peaking EQ whose output matches the
+And VST3:
+
+<!-- illustrative -->
+```julia
+using vst3sdk_jll
+export_plugin(spec, "MyGain.vst3"; format = VST3(vst3sdk_jll.artifact_dir))
+vst3_open!("MyGain.vst3"; block_size = 64)
+```
+
+The wrapper is a single-component effect (processor and controller in one object, no
+editor) compiled as C++ against the Steinberg SDK, which is why VST3 is the one format
+that needs a **C++** compiler and an SDK to point at — MIT since 3.8, and packaged as
+`vst3sdk_jll`, so it is not vendored here. Two things are the format's, not the
+descriptor's:
+
+- **A class is named by a 128-bit UID**, not by a string id, so the descriptor's `id` is
+  hashed into one (FNV-1a 128, namespaced) — reproducible from the descriptor on any
+  machine, which is what lets a host remember it. `vst3_scan` on the bundle reports it.
+- **Parameter values on the wire are normalised to `[0, 1]`** while the descriptor is in
+  plain units. Each parameter becomes a `RangeParameter` over its `[min, max]` and the
+  conversion is the controller's own, so what the step function reads cannot drift from
+  what the host is told; the value that took effect — clamped, and rounded when the
+  parameter is `stepped` — is what reads back.
+
+A `.vst3` is a bundle directory (`Contents/<arch>-linux/`, `Contents/MacOS/`) except on
+Windows, where it is a bare DLL — the format allows either. VST3 authoring builds a C step
+only; a `JuliaStep` is refused rather than half-built.
+
+The same package hosts what it builds, so `test/export_tests.jl`, `test/lv2_export_tests.jl`
+and `test/export_vst3_tests.jl` each build the hand-written step functions under
+`test/export/` and host the result, asserting the same arithmetic of all three formats —
+a plugin that computes one thing as a `.clap` and another as a `.vst3` is a wrapper bug.
+With no generator anywhere: a gain that is sample-exact at 0.5, and an RBJ peaking EQ whose output matches the
 reference recursion, is bitwise identical whether processed as 2 × 128 or 1 × 256 frames,
 and is a different, correct filter at each of 44.1, 48 and 96 kHz because the sample rate
 arrives as a parameter.
@@ -261,6 +296,9 @@ What the exporter needs and does not need:
 
 - **A C compiler** (`cc`, `gcc` or `clang` on `PATH`, or `compiler = ...`), for authoring only.
   Hosting stays toolchain-free.
+- **For VST3, a C++ compiler too** (`c++`, `g++` or `clang++`) and the SDK, which
+  `VST3(sdk_root)` takes — `vst3sdk_jll.artifact_dir` is one. The other two formats' SDKs
+  are vendored under `csrc/vendor`; this one is not.
 - **For Julia steps, `using JuliaC` and Julia ≥ 1.12.** JuliaC is a weak dependency; the
   `AudioPluginsJuliaCExt` extension does the build. On Windows a Julia step must be bundled
   (`bundle = true`); see below for why the `.clap` is a shim there.
@@ -268,8 +306,8 @@ What the exporter needs and does not need:
   generated C calls into reach the link line, and an undefined symbol fails the link rather
   than the first `dlopen`.
 - **No licence machinery.** The output is a plain, royalty-free bundle with nothing embedded.
-- **Formats register themselves.** `CLAP` ships here; a format whose SDK cannot be vendored
-  publicly subtypes `PluginFormat` out of tree and calls `register_plugin_format!`.
+- **Formats register themselves.** `CLAP`, `LV2` and `VST3` ship here; a fourth subtypes
+  `PluginFormat` out of tree and calls `register_plugin_format!`.
 
 ### What a Julia step brings with it
 

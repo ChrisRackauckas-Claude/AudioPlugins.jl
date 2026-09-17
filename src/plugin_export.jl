@@ -14,7 +14,7 @@
 
 using TOML: TOML
 
-export PluginFormat, CLAP, PluginParam, StepInput, StepSource, CStep, JuliaStep, PluginSpec,
+export PluginFormat, CLAP, VST3, PluginParam, StepInput, StepSource, CStep, JuliaStep, PluginSpec,
     read_plugin_spec, export_plugin, register_plugin_format!, plugin_format
 
 # ---------------------------------------------------------------------------
@@ -29,17 +29,26 @@ format implements
 
   * `format_name(fmt) -> String`, the key under which it is registered;
   * `bundle_extension(fmt) -> String`, e.g. `".clap"`;
-  * `emit_wrapper(fmt, spec, dir) -> (; sources, include_dirs)`, writing the
-    format's wrapper C sources into `dir` — they are compiled with
-    `-Wall -Wextra -Werror`;
+  * `emit_wrapper(fmt, spec, dir) -> (; sources, include_dirs, ...)`, writing
+    the format's wrapper sources into `dir` — they are compiled with
+    `-Wall -Wextra -Werror`. Four optional fields carry what a format needs
+    beyond that: `language` (`:c`, the default, or `:cxx` — which also
+    compiles and links the wrapper with the C++ compiler), `support_sources`
+    (third-party sources compiled without `-Werror`), `compile_flags` and
+    `link_flags`;
   * `place_library(fmt, spec, library, out)`, moving one linked shared
     library into the bundle layout at `out`;
   * `runtime_layout(fmt, out) -> (; dir, rpath)`, where a bundled Julia
     runtime goes for the bundle at `out` and the rpath that finds it.
 
-[`CLAP`](@ref) is the format that ships here. Formats whose SDKs cannot be
-vendored in a public repository live out of tree, subtype this, and
-[`register_plugin_format!`](@ref) themselves.
+A format that builds a [`CStep`](@ref) only says so by defining
+`runtime_layout` and `AudioPlugins._export_julia_step` to refuse, as
+[`LV2`](@ref) and [`VST3`](@ref) do: `export_plugin` dispatches to the
+latter before it builds anything.
+
+[`CLAP`](@ref), [`LV2`](@ref) and [`VST3`](@ref) ship here. A format whose
+SDK can be neither vendored nor packaged lives out of tree, subtypes this,
+and calls [`register_plugin_format!`](@ref) itself.
 """
 abstract type PluginFormat end
 
@@ -53,12 +62,77 @@ The CLAP plugin format (MIT, header-only; the headers are vendored under
 struct CLAP <: PluginFormat end
 
 """
+    VST3(sdk_root)
+    VST3(include_dir, lib_dir)
+    VST3()
+
+The VST3 plugin format (MIT since SDK 3.8). Unlike CLAP the SDK is a
+library, not a header, so building a VST3 plugin needs it: `sdk_root` is
+either a directory holding the SDK source tree (`pluginterfaces/`,
+`base/`, `public.sdk/`) with its static libraries under `lib/`, or the
+artifact directory of `vst3sdk_jll`, whose tree is under
+`include/vst3sdk` and libraries under `lib/vst3sdk`. A C++ compiler
+(`c++`, `g++` or `clang++`) is needed too; CLAP needs only a C one.
+
+```julia
+using vst3sdk_jll
+export_plugin(spec, "Gain.vst3"; format = VST3(vst3sdk_jll.artifact_dir))
+```
+
+A bundle is `Name.vst3/Contents/<arch>-linux/Name.so` on Linux,
+`Name.vst3/Contents/MacOS/Name` on macOS, and a bare DLL named
+`Name.vst3` on Windows, which is the shape the format also allows there.
+
+The class id a host identifies the plugin by is not in the descriptor —
+VST3 names a class by a 128-bit UID where the descriptor carries a
+reverse-DNS string — so it is the FNV-1a 128-bit hash of the plugin id,
+which makes it reproducible from the descriptor alone. `vst3_scan` on the
+built bundle reports it.
+
+Only a [`CStep`](@ref) can be built into a `.vst3`: a [`JuliaStep`](@ref)
+is refused, because the wrapper is C++ and juliac compiles the C sources it
+is handed as C. Zero-argument `VST3()` is the format registered as
+`"vst3"`; it names no SDK, so it builds nothing and says so.
+"""
+struct VST3 <: PluginFormat
+    include_dir::String
+    lib_dir::String
+    function VST3(include_dir::AbstractString, lib_dir::AbstractString)
+        if !isempty(include_dir)
+            isdir(include_dir) ||
+                throw(ArgumentError("VST3: SDK include directory $(repr(include_dir)) does not exist"))
+            isdir(joinpath(include_dir, "pluginterfaces")) ||
+                throw(
+                ArgumentError(
+                    "VST3: $(repr(include_dir)) is not a VST3 SDK tree (no pluginterfaces/ in it)"
+                )
+            )
+            isdir(lib_dir) ||
+                throw(ArgumentError("VST3: SDK library directory $(repr(lib_dir)) does not exist"))
+        end
+        return new(String(include_dir), String(lib_dir))
+    end
+end
+
+VST3() = VST3("", "")
+VST3(sdk::Tuple{AbstractString, AbstractString}) = VST3(sdk[1], sdk[2])
+
+function VST3(root::AbstractString)
+    # vst3sdk_jll puts the tree under include/vst3sdk and the libraries
+    # under lib/vst3sdk; a checkout of the SDK itself has neither.
+    jll = joinpath(root, "include", "vst3sdk")
+    isdir(jll) && return VST3(jll, joinpath(root, "lib", "vst3sdk"))
+    return VST3(root, joinpath(root, "lib"))
+end
+
+"""
     format_name(fmt::PluginFormat) -> String
 
 Key `fmt` is registered under, so that `plugin_format(format_name(fmt))`
 returns it again. Part of the [`PluginFormat`](@ref) interface.
 """
 format_name(::CLAP) = "clap"
+format_name(::VST3) = "vst3"
 
 """
     bundle_extension(fmt::PluginFormat) -> String
@@ -68,6 +142,7 @@ Filename extension a bundle of format `fmt` must carry, e.g. `".clap"`.
 the [`PluginFormat`](@ref) interface.
 """
 bundle_extension(::CLAP) = ".clap"
+bundle_extension(::VST3) = ".vst3"
 
 const PLUGIN_FORMATS = Dict{String, PluginFormat}()
 
@@ -890,6 +965,211 @@ function emit_wrapper(::CLAP, spec::PluginSpec, dir::AbstractString)
 end
 
 # ---------------------------------------------------------------------------
+# Rendering the VST3 wrapper
+# ---------------------------------------------------------------------------
+
+const VST3_TEMPLATE = normpath(joinpath(@__DIR__, "..", "csrc", "vst3_plugin_template.cpp"))
+
+# The VST3 subcategory a CLAP feature string stands for. A descriptor names
+# CLAP features because that is the format the exporter started with; what is
+# built is an audio effect either way, so anything unlisted is a plain "Fx".
+const VST3_SUBCATEGORIES = Dict(
+    "analyzer" => "Analyzer",
+    "chorus" => "Modulation",
+    "compressor" => "Dynamics",
+    "delay" => "Delay",
+    "distortion" => "Distortion",
+    "equalizer" => "EQ",
+    "filter" => "Filter",
+    "flanger" => "Modulation",
+    "limiter" => "Dynamics",
+    "mastering" => "Mastering",
+    "phaser" => "Modulation",
+    "pitch-shifter" => "Pitch Shift",
+    "restoration" => "Restoration",
+    "reverb" => "Reverb",
+    "utility" => "Tools",
+)
+
+function _vst3_subcategory(spec::PluginSpec)
+    for f in spec.features
+        haskey(VST3_SUBCATEGORIES, f) && return "Fx|" * VST3_SUBCATEGORIES[f]
+    end
+    return "Fx"
+end
+
+"""
+    _vst3_class_id(id::AbstractString) -> NTuple{4, UInt32}
+
+The VST3 class UID of a plugin whose descriptor id is `id`, as the four
+32-bit words `INLINE_UID` takes: the FNV-1a 128-bit hash of a namespaced
+`id`. VST3 names a class by a 128-bit UID where the descriptor carries a
+reverse-DNS string, so one has to be derived from the other, and a host
+remembers the UID: it is fixed by this hash so that rebuilding a plugin,
+or building it on another machine, gives the same class back.
+"""
+function _vst3_class_id(id::AbstractString)
+    h = 0x6c62272e07bb014262b821756295c58d          # FNV-1a 128-bit offset basis
+    prime = 0x0000000001000000000000000000013b
+    for b in codeunits("AudioPlugins.jl VST3 class:" * id)
+        h = (h ⊻ UInt128(b)) * prime
+    end
+    return ntuple(i -> UInt32((h >> (32 * (4 - i))) & 0xffffffff), 4)
+end
+
+"The class id of [`_vst3_class_id`](@ref) as the 32 hex characters `vst3_scan` reports."
+_vst3_class_id_string(id::AbstractString) =
+    join(uppercase(string(w; base = 16, pad = 8)) for w in _vst3_class_id(id))
+
+function _vst3_param_flags(p::PluginParam)
+    return p.automatable ? "ParameterInfo::kCanAutomate" : "ParameterInfo::kNoFlags"
+end
+
+# ParameterInfo::stepCount: a stepped parameter has one step per integer of
+# its plain range, which is what makes RangeParameter quantise the same way
+# the wrapper's own rounding does.
+_vst3_param_steps(p::PluginParam) = p.stepped ? string(round(Int, p.max - p.min)) : "0"
+
+function _vst3_substitutions(spec::PluginSpec)
+    isempty(spec.pars) && throw(ArgumentError("the parameter struct name is not known yet"))
+    step_args = join(((i.role === :audio ? "x" : "true") for i in spec.inputs), ", ")
+    arrangement = spec.channels == 1 ? "SpeakerArr::kMono" :
+        spec.channels == 2 ? "SpeakerArr::kStereo" :
+        "(SpeakerArrangement)((((uint64)1) << $(spec.channels)) - 1)"
+    param_info = join(
+        (
+            "{ $(p.id)u, STR16($(_c_string(p.name))), $(_c_double(p.min)), " *
+                "$(_c_double(p.max)), $(_c_double(p.default)), $(_vst3_param_steps(p)), " *
+                "$(_vst3_param_flags(p)), $(_c_literal(p.stepped)) },"
+                for p in spec.params
+        ), "\n    "
+    )
+    param_apply = join(
+        (
+            "case $(i - 1): pars_.$(p.field) = $(_param_cast(p)); break;"
+                for (i, p) in enumerate(spec.params)
+        ), "\n        "
+    )
+    constants = join(("pars_.$k = $(_c_literal(v));" for (k, v) in spec.constants), "\n        ")
+    on_activate = spec.sample_rate_field === nothing ? "(void)sr;" :
+        "pars_.$(spec.sample_rate_field) = sr;"
+    output_read = spec.sub_clock ?
+        "if (o.has_$(spec.output)) held_[c] = o.$(spec.output);\n" *
+        "                    double y = held_[c];" :
+        "double y = o.$(spec.output);"
+    return Dict(
+        "HEADER" => spec.base * ".h",
+        "BASE" => spec.base,
+        "PARS" => spec.pars,
+        "CHANNELS" => string(spec.channels),
+        "N_PARAMS" => string(length(spec.params)),
+        "LATENCY" => string(spec.latency),
+        "ARRANGEMENT" => arrangement,
+        "NAME" => _c_string(spec.name),
+        "VENDOR" => _c_string(spec.vendor),
+        "URL" => _c_string(spec.url),
+        "VERSION" => _c_string(spec.version),
+        "SUBCATEGORY" => _c_string(_vst3_subcategory(spec)),
+        "CID" => join(("0x" * uppercase(string(w; base = 16, pad = 8)) for w in _vst3_class_id(spec.id)), ", "),
+        "PARAM_INFO" => param_info,
+        "PARAM_APPLY" => param_apply,
+        "ON_ACTIVATE" => on_activate,
+        "STEP_ARGS" => step_args * ",",
+        "OUTPUT_READ" => output_read,
+        "CONSTANTS" => constants,
+    )
+end
+
+"""
+    emit_wrapper(fmt::VST3, spec, dir)
+        -> (; sources, include_dirs, language, support_sources, compile_flags, link_flags)
+
+Render `csrc/vst3_plugin_template.cpp` for `spec` into `dir/vst3_plugin.cpp`
+and name what it takes to build: the SDK's `vstsinglecomponenteffect.cpp`
+and its per-platform module entry point (`linuxmain.cpp`, `macmain.cpp`,
+`dllmain.cpp`) as support sources, and the SDK's static libraries as link
+flags.
+"""
+function emit_wrapper(fmt::VST3, spec::PluginSpec, dir::AbstractString)
+    isempty(fmt.include_dir) && error(
+        "export_plugin: this VST3 format names no SDK, and the wrapper cannot be built " *
+            "without one. Construct it with the SDK root, e.g. " *
+            "`using vst3sdk_jll; VST3(vst3sdk_jll.artifact_dir)`."
+    )
+    subs = _vst3_substitutions(spec)
+    subs["HEADER"] = basename((spec.step::CStep).header)
+    src = _render_template(read(VST3_TEMPLATE, String), subs)
+    path = joinpath(dir, "vst3_plugin.cpp")
+    write(path, src)
+    main = Sys.isapple() ? "macmain.cpp" : Sys.iswindows() ? "dllmain.cpp" : "linuxmain.cpp"
+    support = [
+        joinpath(fmt.include_dir, "public.sdk", "source", "vst", "vstsinglecomponenteffect.cpp"),
+        joinpath(fmt.include_dir, "public.sdk", "source", "main", main),
+    ]
+    for f in support
+        isfile(f) ||
+            error("export_plugin: the VST3 SDK at $(repr(fmt.include_dir)) has no $(repr(f))")
+    end
+    libs = ["-L" * fmt.lib_dir, "-lsdk", "-lsdk_common", "-lbase", "-lpluginterfaces"]
+    # funknown.cpp calls CoCreateGuid, which is COM: mingw links kernel32,
+    # user32, advapi32 and shell32 by default but never ole32.
+    Sys.iswindows() && push!(libs, "-lole32")
+    Sys.isapple() && append!(libs, ["-framework", "CoreFoundation"])
+    Sys.iswindows() || push!(libs, "-lpthread")
+    return (;
+        sources = [path], include_dirs = [fmt.include_dir], language = :cxx,
+        support_sources = support, compile_flags = ["-DRELEASE=1"], link_flags = libs,
+    )
+end
+
+const VST3_NO_JULIA_STEP = "export_plugin: VST3 authoring builds a CStep only. The VST3 " *
+    "wrapper is C++, and juliac compiles the C sources it is handed as C, so a JuliaStep " *
+    "and this wrapper cannot be put through one juliac build. Build the Julia step as a " *
+    ".clap, or give the plugin a C step."
+
+"""
+    runtime_layout(::VST3, out)
+
+Refused: VST3 authoring builds a [`CStep`](@ref) only, so no Julia runtime is
+ever placed in a `.vst3` bundle.
+"""
+runtime_layout(::VST3, out::AbstractString) = error(VST3_NO_JULIA_STEP)
+
+_export_julia_step(::VST3, spec::PluginSpec, out::AbstractString; compiler, verbose::Bool) =
+    error(VST3_NO_JULIA_STEP)
+
+"""
+    place_library(::VST3, spec, library, out)
+
+Move the linked shared library at `library` into the VST3 bundle at `out`:
+`Contents/<arch>-linux/Name.so` on Linux, `Contents/MacOS/Name` beside an
+`Info.plist` on macOS, and on Windows the bare DLL `Name.vst3` — where a
+module is legally either a bundle directory or a plain DLL.
+
+The Linux architecture directory is named after `uname(2)` and not after
+the process, because that is what the SDK's own module loader asks for: a
+32-bit plugin on a 64-bit kernel lives in `x86_64-linux` or is not found.
+"""
+function place_library(::VST3, spec::PluginSpec, library::AbstractString, out::AbstractString)
+    stem = first(splitext(basename(out)))
+    if Sys.iswindows()
+        mkpath(dirname(out))
+        mv(library, out; force = true)
+        return out
+    end
+    inner = joinpath(out, "Contents", _vst3_module_dir())
+    mkpath(inner)
+    if Sys.isapple()
+        write(joinpath(out, "Contents", "Info.plist"), _info_plist(spec, stem))
+        write(joinpath(out, "Contents", "PkgInfo"), "BNDL????")
+        mv(library, joinpath(inner, stem); force = true)
+    else
+        mv(library, joinpath(inner, stem * ".so"); force = true)
+    end
+    return out
+end
+
+# ---------------------------------------------------------------------------
 # Building
 # ---------------------------------------------------------------------------
 
@@ -901,6 +1181,15 @@ function _resolve_compiler(compiler)
             "or one passed as `compiler`. Hosting plugins does not."
     )
     return cc
+end
+
+function _resolve_cxx_compiler()
+    cxx = _cxx_compiler()
+    cxx === nothing && error(
+        "export_plugin: this format's wrapper is C++ and needs a C++ compiler on PATH " *
+            "(tried c++, g++, clang++). CLAP needs only a C one, and hosting needs neither."
+    )
+    return cxx
 end
 
 function _run(cmd::Cmd, verbose::Bool)
@@ -981,7 +1270,8 @@ end
                   verbose = false) -> out
 
 Build the plugin described by `spec` into the bundle at `out`, whose
-extension must be the format's (`.clap`).
+extension must be the format's: `.clap` for [`CLAP`](@ref), `.vst3` for
+[`VST3`](@ref).
 
 For a [`CStep`](@ref): the wrapper is rendered and compiled under
 `-Wall -Wextra -Werror`; the step's C is compiled without those, since
@@ -999,7 +1289,10 @@ into `Name.clap.runtime\\bin` with its runtime and the `.clap` is a shim
 that loads it, so `bundle = true` is required there.
 
 Both need a C compiler: `cc`, `gcc` or `clang` on `PATH`, or
-`compiler = "/path/to/cc"`. Hosting plugins does not.
+`compiler = "/path/to/cc"`. Hosting plugins does not. A format whose
+wrapper is C++ — [`VST3`](@ref) — also needs `c++`, `g++` or `clang++`,
+and takes a `JuliaStep` from nobody: it is refused before anything is
+built.
 """
 function export_plugin(
         spec::PluginSpec, out::AbstractString; format::PluginFormat = CLAP(),
@@ -1016,20 +1309,32 @@ function export_plugin(
         pkgconfig_flags(step.pkgconfig)
     mktempdir() do dir
         wrapper = emit_wrapper(format, spec, dir)
-        # -isystem rather than -I for the wrapper: the ABI header is someone
-        # else's code and must not fail our -Werror build.
+        # The wrapper's language is the format's; the step function is always C.
+        lang = get(wrapper, :language, :c)
+        lang in (:c, :cxx) ||
+            error("export_plugin: format $(format_name(format)) asked for an unknown wrapper language $(repr(lang))")
+        wcc = lang === :cxx ? _resolve_cxx_compiler() : cc
+        std = lang === :cxx ? "-std=c++17" : "-std=gnu99"
+        # -isystem rather than -I for the wrapper: the ABI header, and an
+        # SDK, are someone else's code and must not fail our -Werror build.
         incs = String[]
         for d in [wrapper.include_dirs; dirname(step.header); dirname(step.source); step.include_dirs]
             push!(incs, "-isystem", d)
         end
         objects = String[]
-        strict = ["-std=gnu99", "-Wall", "-Wextra", "-Werror"]
+        strict = ["-Wall", "-Wextra", "-Werror"]
+        extra = String[get(wrapper, :compile_flags, String[])...]
         # Windows code is position independent already, and MinGW warns about -fPIC.
         pic = Sys.iswindows() ? String[] : ["-fPIC"]
         common = [_c_arch_flags()..., "-O2", pic..., "-fvisibility=hidden", incs..., pc.cflags...]
         for (i, src) in enumerate(wrapper.sources)
             obj = joinpath(dir, "wrapper_$i.o")
-            _run(`$cc $strict $common -c $src -o $obj`, verbose)
+            _run(`$wcc $std $strict $common $extra -c $src -o $obj`, verbose)
+            push!(objects, obj)
+        end
+        for (i, src) in enumerate(get(wrapper, :support_sources, String[]))
+            obj = joinpath(dir, "support_$i.o")
+            _run(`$wcc $std $common $extra -c $src -o $obj`, verbose)
             push!(objects, obj)
         end
         model = joinpath(dir, "model.o")
@@ -1037,7 +1342,11 @@ function export_plugin(
         push!(objects, model)
         library = joinpath(dir, "plugin." * Base.BinaryPlatforms.platform_dlext())
         undefined = Sys.isapple() ? String[] : ["-Wl,--no-undefined"]
-        _run(`$cc $(_c_arch_flags()) -shared $pic -o $library $objects $(pc.libs) $undefined`, verbose)
+        links = String[get(wrapper, :link_flags, String[])...]
+        _run(
+            `$wcc $(_c_arch_flags()) -shared $pic -o $library $objects $(pc.libs) $links $undefined`,
+            verbose
+        )
         place_library(format, spec, library, out)
     end
     return out
@@ -1057,6 +1366,7 @@ function _export_julia_step(format, spec, out; compiler, verbose)
 end
 
 register_plugin_format!(CLAP())
+register_plugin_format!(VST3())
 
 @static if VERSION >= v"1.11"
     eval(
