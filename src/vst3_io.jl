@@ -101,23 +101,23 @@ per-package scratch space and return the bundle path (`.../ap_test.vst3`).
 place the package needs a **C++** compiler, and only for the tests: hosting
 needs nothing but the prebuilt `VST3Host_jll`, which is why `vst3sdk_jll` is a
 test dependency rather than a package dependency. The bundle is laid out as
-the SDK's module loader expects (`Contents/<arch>-linux/`, `Contents/MacOS/`,
-`Contents/<arch>-win/`).
+the SDK's module loader expects it, which on Linux means the architecture
+directory named after `uname -m` rather than after the process's own word size.
 """
 function vst3_test_bundle(sdk_root; force::Bool = false)
     sdk, libdir = sdk_root isa Tuple ? sdk_root : (sdk_root, joinpath(sdk_root, "lib"))
     src = normpath(joinpath(@__DIR__, "..", "test", "plugins", "ap_test_vst3.cpp"))
     root = @get_scratch!("test_plugins_vst3-$(Sys.ARCH)")
     bundle = joinpath(root, "ap_test.vst3")
-    arch = Sys.ARCH == :aarch64 ? "aarch64" : Sys.ARCH == :x86_64 ? "x86_64" : string(Sys.ARCH)
+    inner = joinpath(bundle, "Contents", _vst3_module_dir())
     if Sys.isapple()
-        inner = joinpath(bundle, "Contents", "MacOS"); bin = joinpath(inner, "ap_test")
+        bin = joinpath(inner, "ap_test")
         main = joinpath(sdk, "public.sdk", "source", "main", "macmain.cpp")
     elseif Sys.iswindows()
-        inner = joinpath(bundle, "Contents", arch * "-win"); bin = joinpath(inner, "ap_test.vst3")
+        bin = joinpath(inner, "ap_test.vst3")
         main = joinpath(sdk, "public.sdk", "source", "main", "dllmain.cpp")
     else
-        inner = joinpath(bundle, "Contents", arch * "-linux"); bin = joinpath(inner, "ap_test.so")
+        bin = joinpath(inner, "ap_test.so")
         main = joinpath(sdk, "public.sdk", "source", "main", "linuxmain.cpp")
     end
     if force || !isfile(bin) || stat(src).mtime > stat(bin).mtime
@@ -141,6 +141,16 @@ function vst3_test_bundle(sdk_root; force::Bool = false)
         # binary in the right place is a valid bundle.
     end
     return bundle
+end
+
+# Where inside a bundle the SDK's own loaders look for the binary.
+# module_linux.cpp builds the directory name from uname(2)'s machine field, which
+# is the *kernel's* and not the process's: a 32-bit process on a 64-bit kernel is
+# told "x86_64", so Sys.ARCH would name a directory the loader never opens.
+function _vst3_module_dir()
+    Sys.isapple() && return "MacOS"
+    Sys.iswindows() && return string(Sys.ARCH) * "-win"
+    return readchomp(`uname -m`) * "-linux"
 end
 
 "Path of a C++ compiler, or `nothing`."

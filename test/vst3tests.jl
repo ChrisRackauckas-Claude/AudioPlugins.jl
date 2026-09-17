@@ -13,6 +13,25 @@ const AP = AudioPlugins
 const SDK_INC = joinpath(vst3sdk_jll.artifact_dir, "include", "vst3sdk")
 const SDK_LIB = joinpath(vst3sdk_jll.artifact_dir, "lib", "vst3sdk")
 const AGAIN = joinpath(vst3sdk_jll.artifact_dir, "lib", "vst3", "again-sample-accurate.vst3")
+
+# vst3sdk_jll lays its prebuilt `again` out for the architecture it was built for,
+# but the SDK's Linux loader takes the directory name from uname(2), which answers
+# with the kernel's machine: a 32-bit process on a 64-bit kernel is told "x86_64"
+# and cannot see an i686 bundle at all. Stage a copy under the name that loader
+# will ask for; the binary inside is the artifact's own, untouched.
+function loadable_bundle(bundle)
+    (Sys.islinux() && isdir(bundle)) || return bundle
+    contents = joinpath(bundle, "Contents")
+    want = AP._vst3_module_dir()
+    isdir(joinpath(contents, want)) && return bundle
+    have = only(filter(p -> isdir(p) && endswith(p, "-linux"), readdir(contents; join = true)))
+    staged = joinpath(mktempdir(), basename(bundle))
+    mkpath(joinpath(staged, "Contents"))
+    cp(have, joinpath(staged, "Contents", want))
+    return staged
+end
+
+const AGAIN_BUNDLE = loadable_bundle(AGAIN)
 const VST3_BUNDLE = vst3_test_bundle((SDK_INC, SDK_LIB))
 const GAIN, POLE, LOOK = AP.VST3_TEST_GAIN, AP.VST3_TEST_ONEPOLE, AP.VST3_TEST_LOOKAHEAD
 
@@ -178,10 +197,10 @@ const GAIN, POLE, LOOK = AP.VST3_TEST_GAIN, AP.VST3_TEST_ONEPOLE, AP.VST3_TEST_L
         # vst3sdk_jll ships this one in the format's other legal shape, a bare
         # DLL named `.vst3`. Both are loadable; only the layout differs.
         @test Sys.iswindows() ? isfile(AGAIN) : isdir(AGAIN)
-        classes = vst3_scan(AGAIN)
+        classes = vst3_scan(AGAIN_BUNDLE)
         @test any(c -> c.name == "AGain Sample Accurate", classes)
         again = classes[findfirst(c -> c.name == "AGain Sample Accurate", classes)]
-        vst3_open!(AGAIN; class_id = again.id, block_size = 64, channels = 2)
+        vst3_open!(AGAIN_BUNDLE; class_id = again.id, block_size = 64, channels = 2)
         @test vst3_plugin_name() == "AGain Sample Accurate"
         ps = vst3_params()
         gi = findfirst(p -> p.name == "Gain", ps)
