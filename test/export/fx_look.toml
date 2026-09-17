@@ -1,0 +1,28 @@
+schema = 1
+
+[plugin]
+id = "org.sciml.audioplugins.fixture.look"
+name = "Fixture Lookahead"
+vendor = "AudioPlugins.jl"
+version = "0.1.0"
+description = "a 16-sample delay whose latency is declared rather than hidden"
+channels = 2
+
+[abi]
+base = "fx_look"
+pars = "FxLookPars"
+inputs = [{ name = "u", role = "audio" }]
+output = "y"
+latency = 16
+
+[build]
+source = "fx_look.c"
+header = "fx_look.h"
+
+[[param]]
+id = 0
+name = "Gain"
+field = "gain"
+min = 0.0
+max = 4.0
+default = 1.0

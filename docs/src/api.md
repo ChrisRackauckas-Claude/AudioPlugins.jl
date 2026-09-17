@@ -283,6 +283,7 @@ export_plugin
 ```@docs
 PluginFormat
 CLAP
+LV2
 register_plugin_format!
 plugin_format
 ```

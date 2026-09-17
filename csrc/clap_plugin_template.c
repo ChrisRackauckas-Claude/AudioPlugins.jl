@@ -29,6 +29,7 @@ typedef @BASE@_out ap_out_t;
 
 #define AP_CHANNELS @CHANNELS@
 #define AP_N_PARAMS @N_PARAMS@
+#define AP_LATENCY  @LATENCY@
 
 /* ---------------------------------------------------------------- *
  * Descriptor and parameter table
@@ -206,6 +207,16 @@ static bool ports_get(const clap_plugin_t *p, uint32_t index, bool is_input,
 static const clap_plugin_audio_ports_t PORTS_EXT = { .count = ports_count, .get = ports_get };
 
 /* ---------------------------------------------------------------- *
+ * clap.latency -- the step function's own latency, reported and never
+ * introduced here: a lookahead lives in the step, the wrapper only says
+ * how long it is.
+ * ---------------------------------------------------------------- */
+
+static uint32_t latency_get(const clap_plugin_t *p) { (void)p; return (uint32_t)AP_LATENCY; }
+
+static const clap_plugin_latency_t LATENCY_EXT = { .get = latency_get };
+
+/* ---------------------------------------------------------------- *
  * clap.state -- the parameter values, so a session reloads where it
  * left off. Little-endian on the wire whatever the machine, so a
  * project saved on one platform loads on another:
@@ -372,6 +383,7 @@ static const void *plug_get_extension(const clap_plugin_t *p, const char *id) {
     if (strcmp(id, CLAP_EXT_AUDIO_PORTS) == 0) return &PORTS_EXT;
     if (strcmp(id, CLAP_EXT_PARAMS) == 0) return &PARAMS_EXT;
     if (strcmp(id, CLAP_EXT_STATE) == 0) return &STATE_EXT;
+    if (strcmp(id, CLAP_EXT_LATENCY) == 0) return &LATENCY_EXT;
     return NULL;
 }
 

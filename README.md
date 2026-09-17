@@ -225,6 +225,31 @@ export_plugin(spec, "MyGain.clap")             # a .clap on Linux/Windows, a bun
 clap_open!("MyGain.clap"; block_size = 64)      # and host it, right here (C steps)
 ```
 
+The same descriptor also builds LV2:
+
+<!-- illustrative -->
+```julia
+export_plugin(spec, "MyGain.lv2"; format = LV2())   # a bundle directory, on every platform
+lv2_open!(lv2_default_path("."); uri = "urn:audioplugins:org.example.gain", block_size = 64)
+```
+
+An LV2 host reads a plugin's metadata from Turtle beside the binary rather than from the
+binary, so the bundle is a directory holding the shared object, a `manifest.ttl` naming it
+and a `MyGain.ttl` describing the ports. Two consequences are public naming decisions rather
+than implementation details:
+
+- **The plugin is named by URI.** An `id` that is already an absolute URI is the URI,
+  verbatim, which is how you publish under a domain you control; a plain reverse-DNS `id`
+  becomes `urn:audioplugins:<id>`.
+- **Port indices are the contract**, because an LV2 host addresses a control port by index:
+  the descriptor's parameters first in descriptor order, then one audio input and one audio
+  output per channel (`in_0`, `out_0`, …), then a designated `lv2:latency` port when the
+  descriptor declares a latency. A parameter's LV2 id is therefore its *position* in the
+  descriptor, not its CLAP `id`, and its symbol is the struct field it writes.
+
+The generated bundle requires no host feature. LV2 authoring builds a C step only; a
+`JuliaStep` is refused rather than half-built.
+
 The same package hosts what it builds, so `test/export_tests.jl` proves the seam with
 hand-written step functions under `test/export/` in both C and Julia and no generator
 anywhere: a gain that is sample-exact at 0.5, and an RBJ peaking EQ whose output matches the
