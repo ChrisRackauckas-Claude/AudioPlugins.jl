@@ -154,6 +154,23 @@ end
 # artefact comes out ELFCLASS64 and will not dlopen.
 _c_arch_flags() = (Sys.WORD_SIZE == 32 && Sys.ARCH === :i686) ? ["-m32"] : String[]
 
+# Build a test bundle, folding the compiler's diagnostics into the exception.
+# Plain `run` leaves them wherever the caller's stderr went, which in a CI log is
+# far from the `failed process` error and gone entirely when the runner captures
+# output -- leaving a failed link reported as a command line and no reason.
+function _run_build(cmd::Cmd, what::AbstractString)
+    err = IOBuffer()
+    p = run(pipeline(ignorestatus(cmd); stderr = err))
+    if !success(p)
+        msg = strip(String(take!(err)))
+        error(
+            "$what: the compiler failed (exit $(p.exitcode)).\ncommand: $cmd\n" *
+                (isempty(msg) ? "the compiler printed nothing to stderr." : msg)
+        )
+    end
+    return nothing
+end
+
 """
     build_clap_host!(; force = false)
 
@@ -196,7 +213,7 @@ function clap_test_bundle(; force::Bool = false)
                 "(tried cc, gcc, clang). Hosting itself does not: the host library comes " *
                 "prebuilt from CLAPHost_jll."
         )
-        run(`$cc $(_c_arch_flags()) -O2 -fPIC -shared -Wall -Wextra -o $out $src`)
+        _run_build(`$cc $(_c_arch_flags()) -O2 -fPIC -shared -Wall -Wextra -o $out $src`, "clap_test_bundle")
     end
     return out
 end
