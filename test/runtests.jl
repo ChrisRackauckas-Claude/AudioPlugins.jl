@@ -9,6 +9,7 @@ run_tests(;
     groups = Dict(
         "Bundles" => joinpath(@__DIR__, "bundle_tests.jl"),
         "Export" => joinpath(@__DIR__, "export_tests.jl"),
+        "ExportVST3" => joinpath(@__DIR__, "export_vst3_tests.jl"),
         "LV2" => joinpath(@__DIR__, "lv2tests.jl"),
         "LV2Export" => joinpath(@__DIR__, "lv2_export_tests.jl"),
         "State" => joinpath(@__DIR__, "state_tests.jl"),

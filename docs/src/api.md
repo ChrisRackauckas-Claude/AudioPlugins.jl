@@ -284,6 +284,7 @@ export_plugin
 PluginFormat
 CLAP
 LV2
+VST3
 register_plugin_format!
 plugin_format
 ```
