@@ -23,12 +23,12 @@ preference, for the reason given under
 
 | Collection | Upstream | Upstream licence | Status |
 |---|---|---|---|
-| Airwindows — 504 effects | [baconpaul/airwin2rack](https://github.com/baconpaul/airwin2rack), `airwin-registry` target | MIT | CLAP adapter and sublibrary in this repository; **`Airwindows_jll` is not yet in the General registry**, so the package does not resolve yet |
+| Airwindows — 504 effects | [baconpaul/airwin2rack](https://github.com/baconpaul/airwin2rack), `airwin-registry` target | MIT | Shipped: `Airwindows_jll` 1.0.0 is registered and `lib/Airwindows` is in this repository |
 | Pitch shift / time stretch | [signalsmith-stretch](https://github.com/Signalsmith-Audio/signalsmith-stretch) | MIT | Proposed — a DSP library, so it needs an adapter before it is a plugin at all |
 | Convolution | [HiFi-LoFi/FFTConvolver](https://github.com/HiFi-LoFi/FFTConvolver) | MIT | Proposed — likewise a library |
-| LSP Plugins — 198 plugins | [lsp-plugins](https://github.com/lsp-plugins/lsp-plugins) | LGPL-3.0-or-later | Recipe ([Yggdrasil #14829](https://github.com/JuliaPackaging/Yggdrasil/pull/14829)) and sublibrary open; **`LSPPlugins_jll` is not yet in the General registry**, so the package does not resolve yet |
-| Dragonfly Reverb | [dragonfly-reverb](https://github.com/michaelwillis/dragonfly-reverb) | GPL-3.0-or-later | Recipe ([Yggdrasil #14828](https://github.com/JuliaPackaging/Yggdrasil/pull/14828)) and sublibrary open; **`DragonflyReverb_jll` is not yet in the General registry**, so the package does not resolve yet |
-| ZamPlugins | [zam-plugins](https://github.com/zamaudio/zam-plugins) | GPL-2.0-or-later for the sixteen plugins packaged; the upstream repository is not uniformly so (see below) | Recipe ([Yggdrasil #14832](https://github.com/JuliaPackaging/Yggdrasil/pull/14832)) and sublibrary open; **`ZamPlugins_jll` is not yet in the General registry**, so the package does not resolve yet |
+| LSP Plugins — 198 plugins | [lsp-plugins](https://github.com/lsp-plugins/lsp-plugins) | LGPL-3.0-or-later | Shipped: `LSPPlugins_jll` 1.2.35 is registered and `lib/LSPPlugins` is in this repository. **Linux glibc only** (`x86_64` and `i686`), so it does not resolve on macOS or Windows |
+| Dragonfly Reverb | [dragonfly-reverb](https://github.com/michaelwillis/dragonfly-reverb) | GPL-3.0-or-later | Shipped: `DragonflyReverb_jll` 3.2.10 is registered and `lib/DragonflyReverb` is in this repository |
+| ZamPlugins | [zam-plugins](https://github.com/zamaudio/zam-plugins) | GPL-2.0-or-later for the sixteen plugins packaged; the upstream repository is not uniformly so (see below) | Shipped: `ZamPlugins_jll` 4.5.0 is registered and `lib/ZamPlugins` is in this repository |
 | x42-plugins | [x42-plugins](https://github.com/x42/x42-plugins) | none at the repository level — a meta-repo of submodules, each carrying its own (see below) | Investigated and not packaged: of the 54 plugins that build headless, this package's LV2 host can open 3 — see [Why x42-plugins is not packaged](@ref) |
 
 "Proposed" means exactly that: no recipe, no JLL, no sublibrary, and no commitment that
@@ -93,12 +93,10 @@ Chris Johnson's Airwindows effects — 504 of them in one CLAP module, with ids 
   - `lib/Airwindows`, the sublibrary — the handful of lines that register the bundle
     on load.
 
-What does not exist yet is `Airwindows_jll`. Until it is registered, `Airwindows` cannot
-be installed and the snippet below will not resolve; it is what using the collection will
-look like, not something to run today.
+`Airwindows_jll` 1.0.0 is registered, so this runs:
 
 ```julia
-using AudioPlugins, Airwindows      # illustrative: Airwindows_jll is not yet registered
+using AudioPlugins, Airwindows
 
 plugins(Airwindows_jll)             # all 504 of them
 clap_open!("org.airwindows.Galactic"; sample_rate = 48000, block_size = 256, channels = 2)
