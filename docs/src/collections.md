@@ -76,10 +76,10 @@ are unavailable for unrelated reasons: `fil4`, the parametric EQ, does not compi
 because its DSP includes `cairo.h` for the inline-display extension, and `meters` is in the
 GPL-3.0-or-later tier rather than the GPL-2.0-or-later one.
 
-Packaging is now worth doing on the technical side — most likely as two JLLs, split by
-licence tier — but nothing is packaged yet: the atom-capable host ships in
-`LV2Host_jll` only after the Yggdrasil recipe is rebuilt, and a recipe for the x42
-bundles themselves does not exist.
+Packaging is worth doing on the technical side — most likely as two JLLs, split by
+licence tier — but nothing is packaged yet: the registered `LV2Host_jll` supports
+atom ports and timestamped MIDI input, so what is missing is a recipe for the x42
+bundles themselves.
 
 ### Airwindows
 
