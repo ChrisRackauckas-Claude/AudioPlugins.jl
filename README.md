@@ -129,8 +129,9 @@ that simply is not continuous audio.
 
 ## Testing without third-party binaries
 
-`test/plugins/ap_test_plugins.c` is a CLAP bundle written for this repository, and
-`test/plugins/ap_test_lv2.c` + `ap_test_lv2.ttl` the same three as an LV2 bundle,
+`test/plugins/ap_test_plugins.c` is a CLAP bundle written for this repository,
+`test/plugins/ap_test_lv2.c` + `ap_test_lv2.ttl` an LV2 bundle (the same three
+plus a two-input merge and a sidechain fixture for the channel policy),
 and `test/plugins/ap_test_vst3.cpp` the same three as a VST3 bundle: a gain, a
 one-pole filter, and a 16-sample lookahead. Hosting is only proved by hosting something,
 and depending on a third-party plugin would make the suite rest on a binary whose

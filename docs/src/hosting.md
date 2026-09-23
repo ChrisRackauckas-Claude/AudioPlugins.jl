@@ -292,8 +292,9 @@ self-contained and exports only its `extern "C"` surface.
 ## Testing without third-party binaries
 
 `test/plugins/ap_test_plugins.c` is a CLAP bundle written for this repository, and
-`test/plugins/ap_test_lv2.c` the same three plugins as an LV2 bundle. Hosting is
-only proved by hosting something, and depending on a third-party plugin would make the
+`test/plugins/ap_test_lv2.c` an LV2 bundle with those three plus a two-input
+merge and a sidechain fixture for the channel policy. Hosting is only proved
+by hosting something, and depending on a third-party plugin would make the
 suite rest on a binary whose arithmetic cannot be checked and may not even be fetchable.
 Because these are ours, every expectation is arithmetic rather than a recording:
 
@@ -302,6 +303,27 @@ Because these are ours, every expectation is arithmetic rather than a recording:
     input, which is what proves state survives block boundaries;
   - `ap.lookahead` — reported latency is real, and is surfaced rather than silently
     absorbed.
+
+## Channels
+
+`channels` is the width of the host's audio block, and the rule for matching it
+to a plugin is the same whichever format the plugin ships in — CLAP audio
+ports, VST3 buses and LV2 port groups are different words for the same
+arrangement:
+
+  - A host channel is never silently dropped: opening a plugin with fewer main
+    audio inputs than `channels` is refused, rather than leave a host channel
+    connected to nothing. A plugin with no audio inputs is a generator and
+    opens at any `channels`.
+  - The k-th main audio input is fed host channel `min(k, channels-1)`, so a
+    mono host feeds every input of a stereo plugin by repeating its one
+    channel.
+  - An input the plugin marks as non-main — a sidechain or an auxiliary bus —
+    reads silence, and a non-main output is discarded; neither counts toward
+    the rule above.
+  - The k-th main output writes host channel `k` and further outputs are
+    discarded. Fewer main outputs than `channels` repeats the last one — a mono
+    plugin comes out centred — and a plugin with no audio outputs is silent.
 
 ## VST3
 
@@ -401,14 +423,10 @@ message naming what it asked for. An unconnected required port is undefined beha
 in the LV2 specification, so refusing is the honest answer; a plugin whose extras are
 optional opens fine.
 
-Channel counts are never silently dropped: the k-th audio input port receives host
-channel `min(k, channels-1)`, so a mono host feeds every input of a stereo plugin,
-while a plugin with fewer audio inputs than the requested `channels` is refused
-rather than leave a host channel connected to nothing. On the output side the k-th
-port writes host channel `k` and extra ports are discarded; a plugin with fewer
-audio outputs than the requested channels has its last output repeated on the
-remaining channels, and one with no audio ports is silent — the shape of a MIDI
-tool.
+Channel arrangement follows the shared rule in [Channels](@ref); the LV2 part
+is telling main from non-main ports. A port marked `lv2:isSideChain`, carrying
+`pg:sideChainOf`, or outside a declared `pg:mainInput`/`pg:mainOutput` group is
+non-main; everything else is main.
 
 [`lv2_test_bundle`](@ref) compiles the same test plugins as an LV2 bundle, so the
 LV2 path is proved against arithmetic that can be checked rather than against a
