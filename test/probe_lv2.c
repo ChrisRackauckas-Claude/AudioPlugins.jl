@@ -26,12 +26,13 @@ static void ck(int ok, const char *what) {
 #define POLE  "urn:audioplugins:test:onepole"
 #define LOOK  "urn:audioplugins:test:lookahead"
 #define MERGE "urn:audioplugins:test:merge"
+#define SIDEG "urn:audioplugins:test:sidegain"
 
 int main(int argc, char **argv) {
     const char *DIR = argc > 1 ? argv[1] : ".";
 
     long n = lv2_host_scan(DIR);
-    ck(n == 4, "scan finds the 4 test plugins");
+    ck(n == 5, "scan finds the 5 test plugins");
     if (n < 0) printf("   error: %s\n", lv2_host_last_error());
     int seen = 0;
     for (long i = 0; i < n; i++) {
@@ -39,8 +40,9 @@ int main(int argc, char **argv) {
         if (!strcmp(lv2_host_scan_uri(i), POLE))  seen |= 2;
         if (!strcmp(lv2_host_scan_uri(i), LOOK))  seen |= 4;
         if (!strcmp(lv2_host_scan_uri(i), MERGE)) seen |= 8;
+        if (!strcmp(lv2_host_scan_uri(i), SIDEG)) seen |= 16;
     }
-    ck(seen == 15, "  all four URIs enumerated");
+    ck(seen == 31, "  all five URIs enumerated");
     ck(strcmp(lv2_host_scan_uri(99), "") == 0, "out-of-range descriptor is empty");
 
     ck(lv2_host_scan("/nonexistent/lv2dir") == -1, "a directory without plugins fails");
@@ -55,6 +57,22 @@ int main(int argc, char **argv) {
     ck(lv2_host_open(DIR, GAIN, 48000, 64, 2) != 0,
        "2 channels into a mono-input plugin is refused");
     ck(strstr(lv2_host_last_error(), "audio input") != NULL, "  ... naming audio inputs");
+
+    /* sidegain: out = in + side; the host feeds the sidechain silence. */
+    ck(lv2_host_open(DIR, SIDEG, 48000, 64, 1) == 0,
+       "mono host opens mono-main + sidechain");
+    if (lv2_host_is_open() == 1.0) {
+        ck(lv2_host_n_audio_in() == 1 && lv2_host_n_audio_out() == 1,
+           "  the census counts main ports only");
+        double t = lv2_in_fill((double[64]){[0 ... 63] = 1.0}, 64, 1);
+        double o = lv2_process(t, -1, 0, -1, 0, -1, 0, -1, 0);
+        ck(lv2_out_sample(o, 0, 0) == 1.0 && lv2_out_sample(o, 63, 0) == 1.0,
+           "  the sidechain input reads silence: out = in");
+        lv2_host_close();
+    }
+    ck(lv2_host_open(DIR, SIDEG, 48000, 64, 2) != 0,
+       "stereo host refuses mono-main + sidechain");
+    lv2_host_close();
 
     ck(lv2_host_open(DIR, MERGE, 48000, 64, 2) == 0,
        "2 channels into merge (2 in, 1 out) opens");
@@ -179,8 +197,8 @@ int main(int argc, char **argv) {
         double om = lv2_process(tm, 0, 1.0, -1, 0, -1, 0, -1, 0);
         ck(fabs(lv2_out_peak(om) - 300.0) < 1e-3, "  and it is the one that scales by 300");
 
-        ck(lv2_host_scan(DIR) == 4, "  rescanning the small bundle finds 4 again");
-        ck(strcmp(lv2_host_scan_uri(4), "") == 0, "  with nothing left over from the big one");
+        ck(lv2_host_scan(DIR) == 5, "  rescanning the small bundle finds 5 again");
+        ck(strcmp(lv2_host_scan_uri(5), "") == 0, "  with nothing left over from the big one");
         lv2_host_close();
     }
 
@@ -241,8 +259,20 @@ int main(int argc, char **argv) {
         ck(isnan(lv2_in_midi(tb, 1, 0, 0x90, 0x80, -1)), "a status byte as data is refused");
         ck(isnan(lv2_in_midi(tb, 1, 0, 0x90, -1, 64)), "a byte after a gap is refused");
         ck(isnan(lv2_in_midi(tb, 1, 0, 0x90, 60, 300)), "an out-of-range byte is refused");
+        ck(isnan(lv2_in_midi(tb, 1, 0, 0x90, -1, -1)), "a 1-byte note-on is refused");
+        ck(isnan(lv2_in_midi(tb, 1, 0, 0x90, 60, -1)), "a 2-byte note-on is refused");
+        ck(isnan(lv2_in_midi(tb, 1, 0, 0xC0, 5, 9)), "a 3-byte program change is refused");
+        ck(isnan(lv2_in_midi(tb, 1, 0, 0xF4, -1, -1)), "an undefined status is refused");
+        ck(isnan(lv2_in_midi(tb, 1, 0, 0xF0, 1, 2)), "a sysex start is refused");
         ck(isnan(lv2_process(tb, -1, 0, -1, 0, -1, 0, -1, 0)),
            "the block is refused after a refused event");
+
+        /* Complete short messages queue and the block runs. */
+        double tc = lv2_in_fill(step, 64, 1);
+        ck(lv2_in_midi(tc, 1, 0, 0xC0, 5, -1) == tc, "a 2-byte program change queues");
+        ck(lv2_in_midi(tc, 1, 8, 0xF8, -1, -1) == tc, "a 1-byte clock queues");
+        double oc = lv2_process(tc, -1, 0, -1, 0, -1, 0, -1, 0);
+        ck(!isnan(oc) && lv2_host_port_value(5) == 2.0, "  and both echo");
 
         /* A block with no events: the gate stays open at velocity 127/127. */
         double t2 = lv2_in_fill(step, 64, 1);
@@ -251,10 +281,8 @@ int main(int argc, char **argv) {
            "gate held across a silent block");
         ck(lv2_host_port_value(5) == 0.0, "  and nothing was echoed");
 
-        /* note-off at 0 closes the gate; the event still echoes -- which
-         * only works when the host re-heads the output each run: the last
-         * block left the buffer an 8-byte empty sequence, whose stale
-         * size as "capacity" would admit nothing. */
+        /* note-off at 0 closes the gate; the event still echoes, which
+         * only works when the host re-heads the output each run. */
         double t3 = lv2_in_fill(step, 64, 1);
         ck(lv2_in_midi(t3, 1, 0, 0x80, 60, 0) == t3, "note-off queued");
         double o3 = lv2_process(t3, -1, 0, -1, 0, -1, 0, -1, 0);
@@ -268,10 +296,8 @@ int main(int argc, char **argv) {
         ck(fabs(lv2_out_sample(o4, 0, 0) - 64.0 / 127.0) < 1e-6,
            "note-on velocity 64 gives gain 64/127");
 
-        /* Fill the output sequence: midi_out's 8 KiB buffer holds 340
-         * events of 24 padded bytes; the 341st echo must be dropped, not
-         * written past the buffer (CI runs this probe under ASan, and
-         * midi_out is the arena's last slot so an overrun is caught). */
+        /* midi_out's 8 KiB buffer holds 340 events of 24 padded bytes;
+         * the 341st echo is dropped, not written past the buffer. */
         double t5 = lv2_in_fill(step, 64, 1);
         int queued = 1;
         for (int i = 0; i < 400; i++)

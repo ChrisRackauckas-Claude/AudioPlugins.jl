@@ -1,6 +1,6 @@
-/* ap_test_midi_lv2.c -- the MIDI half of the LV2 test fixtures: a plugin
- * that requires an atom port, for proving the host carries them. Same
- * rule as ap_test_lv2.c: every expectation in the probes is arithmetic.
+/* ap_test_midi_lv2.c -- a plugin that requires an atom port, for proving
+ * the host carries them. Same rule as ap_test_lv2.c: every expectation in
+ * the probes is arithmetic.
  *
  *   urn:audioplugins:test:notegain
  *   ports: 0 patch_in (atom in, connectionOptional, supports patch:Message)
@@ -10,21 +10,16 @@
  *          3 in, 4 out (audio)
  *          5 n_echo   (ctrl out: events echoed this block)
  *
- * midi_out is the last atom port deliberately: its buffer is the last
- * slot in the host's atom arena, so an echo that overruns it writes past
- * the arena's end, where AddressSanitizer sees it.
+ * A note-on opens the gate at the event's exact frame with gain
+ * velocity/127; a note-off closes it, so out[i] = in[i] * velocity/127
+ * while held -- a mis-timed event is visible in the output.
  *
- * A note-on opens the gate at the event's exact frame and sets the gain to
- * velocity/127; a note-off or a zero-velocity note-on closes it. So
- * out[i] = in[i] * velocity/127 while a note is held and 0 otherwise -- an
- * event that lands one sample early or late is visible in the output,
- * which is what the probes assert.
- *
- * n_echo is how the atom OUTPUT path is proved through a scalar: the
- * plugin reads the capacity the host wrote in midi_out->atom.size, clears
- * the sequence and echoes each input event back; a host that failed to
- * reset the capacity each run would present the previous block's content
- * size instead, and the count drops below the number of events sent.
+ * n_echo proves the atom OUTPUT path through a scalar: the plugin reads
+ * the capacity the host wrote in midi_out->atom.size, clears the sequence
+ * and echoes back; a host that stopped resetting the capacity each run
+ * would shrink the count. midi_out is the last atom port deliberately:
+ * an echo that overruns its buffer writes past the arena's end, where
+ * AddressSanitizer sees it.
  */
 #include "../../csrc/vendor/lv2/core/lv2.h"
 #include "../../csrc/vendor/lv2/urid/urid.h"
@@ -82,10 +77,8 @@ static void run_notegain(LV2_Handle h, uint32_t n) {
     uint32_t i = 0;
     int echoed = 0;
 
-    /* The standard output idiom: the host presents an atom:Chunk whose
-     * atom.size is the capacity after the header; the plugin then writes
-     * a sequence bounded by exactly that value. A host that reported the
-     * whole buffer as capacity is caught here, by ASan or the count. */
+    /* The host presents an atom:Chunk whose atom.size is the capacity
+     * after the header; echo bounded by exactly that. */
     uint32_t cap = 0;
     if (s->midi_out) {
         cap = s->midi_out->atom.size;
