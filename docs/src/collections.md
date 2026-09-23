@@ -29,7 +29,7 @@ preference, for the reason given under
 | LSP Plugins — 198 plugins | [lsp-plugins](https://github.com/lsp-plugins/lsp-plugins) | LGPL-3.0-or-later | Shipped: `LSPPlugins_jll` 1.2.35 is registered and `lib/LSPPlugins` is in this repository. **Linux glibc only** (`x86_64` and `i686`), so it does not resolve on macOS or Windows |
 | Dragonfly Reverb | [dragonfly-reverb](https://github.com/michaelwillis/dragonfly-reverb) | GPL-3.0-or-later | Shipped: `DragonflyReverb_jll` 3.2.10 is registered and `lib/DragonflyReverb` is in this repository |
 | ZamPlugins | [zam-plugins](https://github.com/zamaudio/zam-plugins) | GPL-2.0-or-later for the sixteen plugins packaged; the upstream repository is not uniformly so (see below) | Shipped: `ZamPlugins_jll` 4.5.0 is registered and `lib/ZamPlugins` is in this repository |
-| x42-plugins | [x42-plugins](https://github.com/x42/x42-plugins) | none at the repository level — a meta-repo of submodules, each carrying its own (see below) | Investigated and not packaged: of the 54 plugins that build headless, this package's LV2 host can open 53 — see [Why x42-plugins is not packaged](@ref) |
+| x42-plugins | [x42-plugins](https://github.com/x42/x42-plugins) | GPL-2.0-or-later for the fourteen submodules packaged; the meta-repo is not uniformly so (see below) | Shipped: `X42Plugins_jll` (Yggdrasil branch pending registration) and `lib/X42Plugins` — 54 headless LV2 plugins. LV2 collections are not `register_bundle!`'d; use `lv2_default_path(X42Plugins.lv2_dir())` |
 
 "Proposed" means exactly that: no recipe, no JLL, no sublibrary, and no commitment that
 one is coming. It is the list from
@@ -56,30 +56,40 @@ corrected above rather than propagated. lsp-plugins is LGPL-3.0-or-later (its RE
 says "GNU Lesser Public License v3"), not GPLv3. x42-plugins declares no
 repository-level licence at all, being a meta-repository of per-plugin submodules: at
 pin `3fb6abe`, 20 of its 25 submodules are GPL-2.0-or-later throughout while 5 contain
-GPL-3.0-or-later code, so no single label is correct for the collection, though nothing
-in it is GPL-2.0-*only* and so nothing is incompatible. And zam-plugins is
+GPL-3.0-or-later code (plus darc/dpl ship a GPLv3 `COPYING`), so no single label is
+correct for the whole meta-repo. What is packaged here is the fourteen headless
+GPL-2.0-or-later submodules only — see the X42Plugins section below. And zam-plugins is
 GPL-2.0-or-later only for what is packaged here: `ZamVerb` and `ZamHeadX2` link a
 bundled zita-convolver 4.0.0 which is GPL-3.0-or-later, so both are deliberately
 excluded from the JLL to keep the single label true rather than approximate.
 
-### Why x42-plugins is not packaged
+### X42Plugins
 
-The licensing resolves and 14 of its submodules build headless, producing 54 plugins that
-`lv2_scan` enumerates correctly. With atom-port support in `csrc/lv2_host.c` (sequence
-buffers plus timestamped MIDI input), **53** of the 54 open — the one holdout is
-`midimap`, which requires `worker:schedule`. The count needs `libfftw3f.so.3` on the
-loader path for the two `phaserotate` plugins, whose binaries link it; without it they
-are refused at instantiate (51 open) — a plugin dependency, not a host limitation.
+Fourteen LV2 bundles from [x42-plugins](https://github.com/x42/x42-plugins) at pin
+`3fb6abe`, built headless: balance, controlfilter, matrixmixer, mididebug,
+midifilter, midigen, midimap, nodelay, onsettrigger, phaserotate, stepseq,
+stereoroute, testsignal, xfade — **54** plugins. Ids are Robin Gareus' own,
+`http://gareus.org/oss/lv2/…`. LV2 collections do not use
+[`register_bundle!`](@ref); expose the directory and scan it:
 
-The two components [issue #39](https://github.com/SciML/AudioPlugins.jl/issues/39) names
-are unavailable for unrelated reasons: `fil4`, the parametric EQ, does not compile headless
-because its DSP includes `cairo.h` for the inline-display extension, and `meters` is in the
-GPL-3.0-or-later tier rather than the GPL-2.0-or-later one.
+```julia
+using AudioPlugins, X42Plugins
 
-Packaging is worth doing on the technical side — most likely as two JLLs, split by
-licence tier — but nothing is packaged yet: the registered `LV2Host_jll` supports
-atom ports and timestamped MIDI input, so what is missing is a recipe for the x42
-bundles themselves.
+path = lv2_default_path(lv2_dir())
+lv2_scan(path)             # 54
+lv2_open!(path; uri = "http://gareus.org/oss/lv2/nodelay",
+          sample_rate = 48000, block_size = 256, channels = 1)
+```
+
+`phaserotate` needs `libfftw3f` (pulled in by the JLL via `FFTW_jll`). `midimap`
+needs `worker:schedule`, which this host does not provide — it is in the artifact
+and enumerated by `lv2_scan`, but `lv2_open!` refuses it (53 of 54 open).
+
+Not packaged: the GPL-3.0-or-later trees (darc, dpl, fat1, meters, sisco, zconvo —
+meters/sisco also need cairo/OpenGL) and the GPL-2.0-or-later plugins that do not
+build headless (fil4, tuna, spectra, mixtri). A separate GPL-3.0-or-later JLL was
+considered and rejected: only four of those submodules build headless, which is too
+thin next to this collection.
 
 ### Airwindows
 
