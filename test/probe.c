@@ -7,13 +7,15 @@
  *   cc -O2 -fPIC -shared -o ap_test.clap test/plugins/ap_test_plugins.c
  *   cc -O2 -fPIC -shared -o ap_many.clap test/plugins/ap_test_many.c
  *   cc -O2 -fPIC -shared -o ap_manyparams.clap test/plugins/ap_test_manyparams.c
+ *   cc -O2 -fPIC -shared -o ap_sidechain.clap test/plugins/ap_test_sidechain.c
  *   cc -O2 -o probe test/probe.c csrc/clap_host.c -ldl -lm
- *   ./probe ./ap_test.clap /lib/x86_64-linux-gnu/libm.so.6 ./ap_many.clap ./ap_manyparams.clap
+ *   ./probe ./ap_test.clap /lib/x86_64-linux-gnu/libm.so.6 ./ap_many.clap ./ap_manyparams.clap ./ap_sidechain.clap
  *
  * argv[1] is the bundle (or the path `clap_test_bundle()` returns from
- * Julia); argv[2] to argv[4] are optional -- a shared object that is not a
- * plugin, the many-plugin bundle of test/plugins/ap_test_many.c, and the
- * eight-parameter bundle of test/plugins/ap_test_manyparams.c. */
+ * Julia); argv[2] to argv[5] are optional -- a shared object that is not a
+ * plugin, the many-plugin bundle of test/plugins/ap_test_many.c, the
+ * eight-parameter bundle of test/plugins/ap_test_manyparams.c, and the
+ * sidechain bundle of test/plugins/ap_test_sidechain.c. */
 
 #include "../csrc/clap_host.h"
 #include <math.h>
@@ -271,6 +273,57 @@ int main(int argc, char **argv) {
            "  the refusal reaches the output");
         clap_host_close();
         ck(clap_host_open_index() == -1, "  and nothing is open afterwards");
+    }
+
+    /* --- the declared audio layout is what process() gets -------------
+     * Two mono inputs (main + sidechain) and one output is a layout that
+     * is not one bus of `channels` channels each way. A host that never
+     * reads clap.audio-ports sends that anyway -- and this fixture refuses
+     * it outright, so these checks fail on such a host rather than running
+     * on corrupted state. */
+    if (argc > 5) {
+        const char *SC = argv[5];
+        ck(clap_host_scan(SC) == 2, "scan finds the two sidechain plugins");
+        ck(strcmp(clap_host_scan_id(0), "ap.sidechain") == 0, "  first is ap.sidechain");
+        ck(strcmp(clap_host_scan_id(1), "ap.sidechain.stereo") == 0,
+           "  then ap.sidechain.stereo");
+
+        /* Mono out at one host channel: both declared inputs are fed the
+         * one input channel -- the sidechain hears the signal itself. */
+        ck(clap_host_open(SC, "ap.sidechain", 48000, 64, 1) == 0, "open ap.sidechain");
+        ck(clap_host_n_audio_in() == 2, "  wired for 2 input channels (main + sidechain)");
+        ck(clap_host_n_audio_out() == 1, "  and 1 output channel");
+        double a[64];
+        for (int i = 0; i < 64; i++) a[i] = sin(0.1 * i);
+        double tok = clap_process(clap_in_fill(a, 64, 1), -1, 0, -1, 0, -1, 0, -1, 0);
+        ck(!isnan(tok), "  a 2-in/1-out plugin is processed, not refused");
+        int exact = 1;
+        for (int i = 0; i < 64; i++)
+            if (fabs(clap_out_sample(tok, i, 0) - a[i] * a[i]) > 1e-6) { exact = 0; break; }
+        ck(exact, "  out == in * sidechain, the sidechain hearing the input");
+
+        /* Two host channels asks for two output channels the plugin does
+         * not declare: refused at open, naming what was declared. */
+        ck(clap_host_open(SC, "ap.sidechain", 48000, 64, 2) != 0,
+           "  asking for more outputs than declared is refused at open");
+        ck(strstr(clap_host_last_error(), "output channel") != NULL,
+           "  ... saying how many output channels it has");
+
+        /* Stereo out at two host channels: the sidechain is channel 1. */
+        ck(clap_host_open(SC, "ap.sidechain.stereo", 48000, 64, 2) == 0,
+           "open the stereo-out variant at channels=2");
+        ck(clap_host_n_audio_in() == 2 && clap_host_n_audio_out() == 2,
+           "  wired 2 in / 2 out");
+        double b[128];
+        for (int i = 0; i < 64; i++) { b[2 * i] = a[i]; b[2 * i + 1] = 0.5; }
+        tok = clap_process(clap_in_fill(b, 64, 2), -1, 0, -1, 0, -1, 0, -1, 0);
+        ck(!isnan(tok), "  processed at channels=2");
+        ck(fabs(clap_out_sample(tok, 0, 1) - 0.5) < 1e-6,
+           "  the sidechain is host channel 1 (out[1] echoes it)");
+        ck(fabs(clap_out_sample(tok, 0, 0) - a[0] * 0.5) < 1e-6,
+           "  and out[0] is in * sidechain");
+        clap_host_close();
+        ck(clap_host_is_open() == 0.0, "  closed");
     }
 
     printf("\n%s (%d failure%s)\n", fails ? "FAILURES" : "ALL PROBES PASS",
