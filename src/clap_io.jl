@@ -45,7 +45,6 @@ export build_clap_host!, clap_host_available, clap_lib_path, clap_src_path, clap
 # absolute path -- what a generated C program links against -- is
 # `clap_lib_path()`, and the C source it was built from is `clap_src_path()`.
 using CLAPHost_jll: CLAPHost_jll
-using Libdl: Libdl
 using Scratch: @get_scratch!
 
 const CLAP_HOST_AVAILABLE = CLAPHost_jll.is_available()
@@ -77,15 +76,6 @@ function clap_lib_path()
             "csrc/clap_host.c instead, see clap_host_available()"
     )
     return CLAPHost_jll.libclap_host_path::String
-end
-
-"Whether the loaded host library exports symbol `sym` — for tests gating on
-whether the installed `CLAPHost_jll` predates a host feature."
-_host_exports(sym::Symbol) =
-    clap_host_available() && let h = Libdl.dlopen(clap_lib_path())
-    ok = Libdl.dlsym_e(h, sym) != C_NULL
-    Libdl.dlclose(h)
-    ok
 end
 
 """
@@ -789,12 +779,6 @@ Returns `NaN` when nothing is open, when `dep` does not name the current input
 block, when `id` is not a parameter the open plugin declares, when `value` is
 `NaN`, or when the queue is full. Filling a new input block abandons a pending
 chain, so a refused chain cannot leak into the next block.
-
-!!! note
-    Needs a host newer than `CLAPHost_jll` 1.0.1, which is a build of
-    `csrc/clap_host.c` from before this entry point existed. Against that host
-    the call fails to find the symbol; the C-level behaviour is covered by
-    `test/probe.c`, which compiles the source in this repository.
 """
 clp_set(dep, id, value) =
     ccall(
@@ -813,10 +797,6 @@ chain. The host holds one plugin at a time and the driver is what opens it, so
 without this a model built for one effect processes through whichever effect
 happens to be open and returns numbers that look fine. `NaN` in, `NaN` out, so
 it composes with the rest of the refusal path.
-
-!!! note
-    Needs a host newer than `CLAPHost_jll` 1.0.1 — see
-    [`clp_set`](@ref AudioPlugins.clp_set).
 """
 clp_expect(dep, index) =
     ccall((:clap_expect, CLAP_LIB), Cdouble, (Cdouble, Cdouble), dep, index)
