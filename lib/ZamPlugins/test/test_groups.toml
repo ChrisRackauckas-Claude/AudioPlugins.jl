@@ -1,0 +1,21 @@
+# The sublibrary CI matrix: SublibraryCI.yml expands this file into one leg per
+# section x version, each pinned to its `runner`. The `os` list the root
+# test/test_groups.toml uses is root-matrix only -- the sublibrary expansion
+# ignores it -- so the OS axis is spelled out as one section per OS. Every
+# section runs the same test/runtests.jl; what differs is where: ZamPlugins_jll
+# ships macOS and Windows artifacts that have never executed in this repo's CI.
+[Core]
+versions = ["lts", "1"]
+runner = "ubuntu-latest"
+
+[Core-macOS]
+versions = ["lts", "1"]
+runner = "macos-latest"
+
+[Core-Windows]
+versions = ["lts", "1"]
+runner = "windows-latest"
+
+# Centrally clamped to julia "1".
+[QA]
+versions = ["1"]

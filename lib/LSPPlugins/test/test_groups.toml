@@ -1,0 +1,15 @@
+# The sublibrary CI matrix: SublibraryCI.yml expands this file into one leg per
+# section x version, each pinned to its `runner`.
+#
+# Linux-only by design: LSPPlugins_jll ships binaries for x86_64-linux-gnu and
+# i686-linux-gnu only -- upstream LSP releases no macOS or Windows build of the
+# CLAP module, so there is nothing to register or host off Linux. No non-Linux
+# leg is declared: one could not fail on a bug in this package, only on the
+# missing artifact, which is a property of the collection.
+[Core]
+versions = ["lts", "1"]
+runner = "ubuntu-latest"
+
+# Centrally clamped to julia "1".
+[QA]
+versions = ["1"]
