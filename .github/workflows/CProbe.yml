@@ -61,10 +61,9 @@ jobs:
   # csrc/airwindows, the Airwindows collection as one 504-plugin CLAP module.
   # Its own job because building airwin-registry is 527 translation units and
   # nothing else here waits on it. The registry is MIT; only that target is
-  # built, so no GPL3 JUCE or Rack material is compiled or linked. The macOS leg
-  # exercises the published-artifact platform that has only ever been inspected
-  # statically; Windows stays out because it would mean building airwin-registry
-  # under msys2 rather than just recompiling the probe.
+  # built, so no GPL3 JUCE or Rack material is compiled or linked. Windows is
+  # not in the matrix: building airwin-registry there needs msys2, not just a
+  # recompiled probe.
   probe-airwindows:
     strategy:
       fail-fast: false
@@ -95,11 +94,10 @@ jobs:
         run: |
           AW=$PWD/aw
           # `--no-undefined` is GNU ld syntax; macOS ld64 already errors on
-          # undefined symbols when linking a dylib, and -ldl exists only where
-          # dlopen is not part of libSystem.
-          if [ "$RUNNER_OS" = "macOS" ]; then UNDEF=""; DL=""; else UNDEF="-Wl,--no-undefined"; DL="-ldl"; fi
+          # undefined symbols.
+          if [ "$RUNNER_OS" = "macOS" ]; then UNDEF=""; else UNDEF="-Wl,--no-undefined"; fi
           c++ -std=c++17 -O2 -fPIC -shared -fvisibility=hidden -Wall -Wextra -isystem $AW/src -o Airwindows.clap csrc/airwindows/airwindows_clap.cpp -L$AW/build -lairwin-registry -lawdoc_resources $UNDEF
-          cc -std=gnu99 -O2 -Wall -Wextra -o probe_airwindows test/probe_airwindows.c csrc/clap_host.c $DL -lm
+          cc -std=gnu99 -O2 -Wall -Wextra -o probe_airwindows test/probe_airwindows.c csrc/clap_host.c -ldl -lm
           ./probe_airwindows "$PWD/Airwindows.clap"
 
   # The Windows build of the CLAP host, with the same mingw-w64 gcc Yggdrasil
