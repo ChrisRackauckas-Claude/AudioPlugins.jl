@@ -1,7 +1,5 @@
-/* lv2_host.c -- see lv2_host.h for what this is and why it is shaped this
- * way. Allocation-free after open, like clap_host.c: the audio, control
- * and atom buffers are static or arena-allocated at open; lilv allocates
- * during scan and open, which is driver-side.
+/* lv2_host.c -- see lv2_host.h. Allocation-free after open, like
+ * clap_host.c: lilv allocates during scan and open, which is driver-side.
  */
 
 #include "lv2_host.h"
@@ -24,9 +22,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* ---------------------------------------------------------------- *
- * 1. Error reporting
- * ---------------------------------------------------------------- */
+/* ---- 1. Error reporting ---- */
 
 static char ERR[512];
 
@@ -39,16 +35,24 @@ static void set_err(const char *fmt, ...) {
 
 const char *lv2_host_last_error(void) { return ERR; }
 
-/* ---------------------------------------------------------------- *
- * 2. The host features we offer
+/* ---- 2. The host features we offer ----
  *
  * urid:map / urid:unmap because nearly every modern plugin requires
  * them; the two buf-size flags because they are true of this host. A
  * plugin that maps more than LV2_HOST_MAX_URIDS URIs gets 0 back, which
  * the spec allows for "cannot map".
- * ---------------------------------------------------------------- */
+ */
 
 #define LV2_HOST_MAX_URIDS 1024
+
+/* isSideChain postdates the vendored lv2.h, and port-groups ships no
+ * header; the URIs are stable, so write them out. */
+#define LV2_CORE__isSideChain  LV2_CORE_PREFIX "isSideChain"
+#define LV2_PG_PREFIX          "http://lv2plug.in/ns/ext/port-groups#"
+#define LV2_PG__group          LV2_PG_PREFIX "group"
+#define LV2_PG__mainInput      LV2_PG_PREFIX "mainInput"
+#define LV2_PG__mainOutput     LV2_PG_PREFIX "mainOutput"
+#define LV2_PG__sideChainOf    LV2_PG_PREFIX "sideChainOf"
 
 static char    *URIS[LV2_HOST_MAX_URIDS];
 static uint32_t N_URIS;
@@ -87,9 +91,7 @@ static int feature_supported(const char *uri) {
     return 0;
 }
 
-/* ---------------------------------------------------------------- *
- * 3. State
- * ---------------------------------------------------------------- */
+/* ---- 3. State ---- */
 
 /* Copied, not pointed at: lilv's nodes belong to the world the next scan
  * frees. */
@@ -108,8 +110,8 @@ typedef struct {
     double sample_rate;
     long   block, chan;
 
-    /* Descriptor cache from the last scan, grown to fit what the search path
-     * holds. Allocated at scan time, never in the processing path. */
+    /* Descriptor cache from the last scan; allocated at scan time, never
+     * in the processing path. */
     long    n_desc;
     long    cap_desc;
     desc_t *desc;
@@ -121,8 +123,7 @@ typedef struct {
     long   n_audio_in, n_audio_out;
     long   latency_port;             /* -1 when the plugin reports none */
 
-    /* Parameters = control input ports. */
-    long   n_params;
+    long   n_params;                    /* parameters = control input ports */
     long   p_port[LV2_HOST_MAX_PARAMS];
     double p_min[LV2_HOST_MAX_PARAMS], p_max[LV2_HOST_MAX_PARAMS], p_def[LV2_HOST_MAX_PARAMS];
     char   p_name[LV2_HOST_MAX_PARAMS][128];
@@ -152,6 +153,7 @@ typedef struct {
     float  in[LV2_HOST_MAX_CHAN][LV2_HOST_MAX_BLOCK];
     float  out[LV2_HOST_MAX_CHAN][LV2_HOST_MAX_BLOCK];
     float  sink[LV2_HOST_MAX_BLOCK];   /* outputs beyond `chan` go here */
+    float  side_in[LV2_HOST_MAX_BLOCK];/* non-main audio inputs read silence */
 
     long   in_token, out_token;
     int    in_armed;    /* 1 between fill/tone and the process that consumes it */
@@ -162,9 +164,7 @@ typedef struct {
 
 static state_t S;
 
-/* ---------------------------------------------------------------- *
- * 4. Discovery
- * ---------------------------------------------------------------- */
+/* ---- 4. Discovery ---- */
 
 static void free_world(void) {
     if (S.inst) {
@@ -184,11 +184,10 @@ static const char *node_str(const LilvNode *n) {
     return n ? lilv_node_as_string(n) : "";
 }
 
-/* Not a cap on what a search path may hold -- the cache grows to fit -- but
- * the point past which an enumeration is a runaway. */
+/* The point past which an enumeration is a runaway (the cache itself grows
+ * to fit). */
 #define LV2_HOST_SCAN_SANITY 65536
 
-/* Never shrinks, so a large path followed by a small one does not churn. */
 static int grow_desc(long n) {
     if (n <= S.cap_desc) return 1;
     long cap = S.cap_desc ? S.cap_desc : 64;
@@ -253,9 +252,7 @@ long lv2_host_scan(const char *lv2_path) {
 const char *lv2_host_scan_uri(long i)  { return (i >= 0 && i < S.n_desc) ? S.desc[i].uri  : ""; }
 const char *lv2_host_scan_name(long i) { return (i >= 0 && i < S.n_desc) ? S.desc[i].name : ""; }
 
-/* ---------------------------------------------------------------- *
- * 5. Open / close
- * ---------------------------------------------------------------- */
+/* ---- 5. Open / close ---- */
 
 static int port_is(const LilvPlugin *p, const LilvPort *port, const char *cls) {
     LilvNode *n = lilv_new_uri(S.world, cls);
@@ -310,6 +307,44 @@ static double atom_min_size(const LilvPlugin *p, const LilvPort *port) {
         lilv_nodes_free(vals);
     }
     return r;
+}
+
+/* 1 when an audio port is on the plugin's main signal path. A port
+ * marked lv2:isSideChain, or carrying (or grouped under) pg:sideChainOf,
+ * is not main. When the plugin names a pg:mainInput / pg:mainOutput
+ * group, a port is main exactly when its pg:group is that group. With
+ * no sidechain or port-group information a port is main. */
+static int port_main(const LilvPlugin *p, const LilvPort *port, int is_in) {
+    if (port_has(p, port, LV2_CORE__isSideChain)) return 0;
+    LilvNode *pred = lilv_new_uri(S.world, LV2_PG__sideChainOf);
+    LilvNodes *sc = lilv_port_get_value(p, port, pred);
+    lilv_node_free(pred);
+    if (sc) { lilv_nodes_free(sc); return 0; }
+
+    pred = lilv_new_uri(S.world, is_in ? LV2_PG__mainInput : LV2_PG__mainOutput);
+    LilvNodes *mains =
+        lilv_world_get(S.world, lilv_plugin_get_uri(p), pred, NULL);
+    lilv_node_free(pred);
+    if (!mains) return 1;
+
+    int main = 0;
+    pred = lilv_new_uri(S.world, LV2_PG__group);
+    LilvNodes *groups = lilv_port_get_value(p, port, pred);
+    lilv_node_free(pred);
+    LILV_FOREACH (nodes, i, groups) {
+        const LilvNode *g = lilv_nodes_get(groups, i);
+        pred = lilv_new_uri(S.world, LV2_PG__sideChainOf);
+        LilvNodes *gsc = lilv_world_get(S.world, g, pred, NULL);
+        lilv_node_free(pred);
+        int gside = gsc != NULL;
+        lilv_nodes_free(gsc);
+        if (gside) continue;
+        LILV_FOREACH (nodes, j, mains)
+            if (lilv_node_equals(lilv_nodes_get(mains, j), g)) main = 1;
+    }
+    lilv_nodes_free(groups);
+    lilv_nodes_free(mains);
+    return main;
 }
 
 /* MIDI only when atom:supports names midi:MidiEvent, as jalv does. */
@@ -377,7 +412,6 @@ int lv2_host_open(const char *lv2_path, const char *uri,
         lilv_node_free(name);
     }
 
-    /* Required features we do not provide: refuse, naming the feature. */
     LilvNodes *req = lilv_plugin_get_required_features(p);
     LILV_FOREACH (nodes, i, req) {
         const char *f = node_str(lilv_nodes_get(req, i));
@@ -391,7 +425,6 @@ int lv2_host_open(const char *lv2_path, const char *uri,
     }
     lilv_nodes_free(req);
 
-    /* Port census from the manifest. */
     S.n_ports = (long)lilv_plugin_get_num_ports(p);
     if (S.n_ports > LV2_HOST_MAX_PORTS) {
         set_err("plugin '%s' has %ld ports, more than this host's %d",
@@ -407,7 +440,6 @@ int lv2_host_open(const char *lv2_path, const char *uri,
     S.n_atom = 0;
     memset(S.atom_slot, -1, sizeof S.atom_slot);
 
-    /* Ranges for every port in one call (lilv's recommended way). */
     float *mins = (float *)calloc((size_t)S.n_ports, sizeof(float));
     float *maxs = (float *)calloc((size_t)S.n_ports, sizeof(float));
     float *defs = (float *)calloc((size_t)S.n_ports, sizeof(float));
@@ -420,7 +452,8 @@ int lv2_host_open(const char *lv2_path, const char *uri,
     lilv_plugin_get_port_ranges_float(p, mins, maxs, defs);
 
     typedef enum {
-        K_AUDIO_IN, K_AUDIO_OUT, K_CTRL_IN, K_CTRL_OUT, K_ATOM_IN, K_ATOM_OUT, K_NONE
+        K_AUDIO_IN, K_AUDIO_OUT, K_AUDIO_IN_SIDE, K_AUDIO_OUT_SIDE,
+        K_CTRL_IN, K_CTRL_OUT, K_ATOM_IN, K_ATOM_OUT, K_NONE
     } kind_t;
     kind_t kind[LV2_HOST_MAX_PORTS];
     size_t arena_bytes = 0;
@@ -434,8 +467,14 @@ int lv2_host_open(const char *lv2_path, const char *uri,
         int ctrl   = port_is(p, port, LILV_URI_CONTROL_PORT);
         int atom   = port_is(p, port, LILV_URI_ATOM_PORT);
 
-        if (audio && is_in)       { kind[k] = K_AUDIO_IN;  S.n_audio_in++;  }
-        else if (audio && is_out) { kind[k] = K_AUDIO_OUT; S.n_audio_out++; }
+        if (audio && is_in) {
+            if (port_main(p, port, 1)) { kind[k] = K_AUDIO_IN;      S.n_audio_in++; }
+            else                       { kind[k] = K_AUDIO_IN_SIDE; }
+        }
+        else if (audio && is_out) {
+            if (port_main(p, port, 0)) { kind[k] = K_AUDIO_OUT;      S.n_audio_out++; }
+            else                       { kind[k] = K_AUDIO_OUT_SIDE; }
+        }
         else if (ctrl && is_in) {
             kind[k] = K_CTRL_IN;
             S.is_ctrl_in[k] = 1;
@@ -496,6 +535,14 @@ int lv2_host_open(const char *lv2_path, const char *uri,
                 S.atom_cap[s]  = (S.atom_cap[s] + 7u) & ~(size_t)7u;
                 S.atom_off[s]  = arena_bytes;
                 arena_bytes   += S.atom_cap[s];
+                if (arena_bytes > LV2_HOST_ATOM_ARENA_MAX) {
+                    set_err("plugin '%s' asks for more than %u bytes of atom "
+                            "buffers, which this host will not allocate",
+                            S.plugin_uri, (unsigned)LV2_HOST_ATOM_ARENA_MAX);
+                    free(mins); free(maxs); free(defs);
+                    fail_open();
+                    return 1;
+                }
                 S.atom_nev[s]  = 0;
                 S.atom_last[s] = -1;
             }
@@ -515,9 +562,10 @@ int lv2_host_open(const char *lv2_path, const char *uri,
         }
     }
     free(mins); free(maxs); free(defs);
-    /* More host channels than audio inputs would silently drop a channel. */
+    /* More host channels than main audio inputs would silently drop a
+     * channel. */
     if (S.n_audio_in > 0 && S.n_audio_in < ch) {
-        set_err("plugin '%s' has %ld audio input port%s but the host was asked "
+        set_err("plugin '%s' has %ld main audio input port%s but the host was asked "
                 "for %ld channels; host channel %ld would feed no port",
                 S.plugin_uri, S.n_audio_in, S.n_audio_in == 1 ? "" : "s",
                 ch, S.n_audio_in);
@@ -555,8 +603,10 @@ int lv2_host_open(const char *lv2_path, const char *uri,
         return 1;
     }
 
-    /* Audio: k-th input port <- host channel min(k, ch-1); k-th output
-     * port -> host channel k, or the sink when k >= ch. */
+    /* Audio: k-th main input port <- host channel min(k, ch-1); k-th
+     * main output port -> host channel k, or the sink when k >= ch.
+     * Non-main inputs read a zeroed buffer, non-main outputs the sink. */
+    memset(S.side_in, 0, sizeof S.side_in);
     long ai = 0, ao = 0;
     for (long k = 0; k < S.n_ports; k++) {
         switch (kind[k]) {
@@ -564,9 +614,15 @@ int lv2_host_open(const char *lv2_path, const char *uri,
             lilv_instance_connect_port(S.inst, (uint32_t)k, S.in[ai < ch ? ai : ch - 1]);
             ai++;
             break;
+        case K_AUDIO_IN_SIDE:
+            lilv_instance_connect_port(S.inst, (uint32_t)k, S.side_in);
+            break;
         case K_AUDIO_OUT:
             lilv_instance_connect_port(S.inst, (uint32_t)k, ao < ch ? S.out[ao] : S.sink);
             ao++;
+            break;
+        case K_AUDIO_OUT_SIDE:
+            lilv_instance_connect_port(S.inst, (uint32_t)k, S.sink);
             break;
         case K_CTRL_IN:
         case K_CTRL_OUT:
@@ -626,9 +682,7 @@ void lv2_host_close(void) {
 const char *lv2_host_plugin_name(void) { return S.plugin_name; }
 const char *lv2_host_plugin_uri(void)  { return S.plugin_uri; }
 
-/* ---------------------------------------------------------------- *
- * 6. Parameter and configuration reporting
- * ---------------------------------------------------------------- */
+/* ---- 6. Parameter and configuration reporting ---- */
 
 long lv2_host_n_params(void) { return S.n_params; }
 
@@ -654,8 +708,6 @@ double lv2_host_port_value(double port_index) {
     if (k < 0 || k >= S.n_ports || (!S.is_ctrl_in[k] && !S.is_ctrl_out[k])) return NAN;
     return (double)S.ctrl[k];
 }
-
-/* Atom port census. */
 
 static int aidx(long i) { return (i >= 0 && i < S.n_atom); }
 
@@ -701,9 +753,7 @@ double lv2_host_is_open(void)     { return S.open ? 1.0 : 0.0; }
 long   lv2_host_n_process(void)   { return S.n_process; }
 void   lv2_host_reset_counters(void) { S.n_process = 0; }
 
-/* ---------------------------------------------------------------- *
- * 7. The input block
- * ---------------------------------------------------------------- */
+/* ---- 7. The input block ---- */
 
 /* Inputs are headed with an empty atom:Sequence in frame time; outputs
  * with an atom:Chunk whose size is the space after the atom header --
@@ -789,6 +839,23 @@ double lv2_in_sample(double dep, double i, double ch) {
     return (double)S.in[c][k];
 }
 
+/* Bytes a complete message with this status carries: channel messages 3
+ * (2 for 0xC0-0xDF program change / channel pressure), the listed system
+ * messages, -1 for variable-length sysex this call cannot carry, 0 for
+ * undefined statuses. */
+static int midi_msg_len(uint8_t st) {
+    if (st < 0xC0)  return 3;
+    if (st < 0xE0)  return 2;
+    if (st < 0xF0)  return 3;
+    if (st >= 0xF8) return 1;
+    switch (st) {
+    case 0xF1: case 0xF3: return 2;
+    case 0xF2: return 3;
+    case 0xF6: return 1;
+    default:  return (st == 0xF0 || st == 0xF7) ? -1 : 0;
+    }
+}
+
 /* dep is the input token, returned so a chain orders before lv2_process.
  * A refusal after the token check poisons the armed block. */
 static double midi_refused(const char *fmt, ...) {
@@ -852,6 +919,17 @@ double lv2_in_midi(double dep, double port, double frame,
     }
     if (nb == 0)
         return midi_refused("lv2_in_midi: a MIDI event needs a status byte");
+    int want = midi_msg_len(msg[0]);
+    if (want < 0)
+        return midi_refused("lv2_in_midi: status 0x%02lX is variable-length; "
+                            "this call carries complete 1-3 byte messages only",
+                            (unsigned long)msg[0]);
+    if (want == 0)
+        return midi_refused("lv2_in_midi: status 0x%02lX is undefined",
+                            (unsigned long)msg[0]);
+    if (nb != want)
+        return midi_refused("lv2_in_midi: status 0x%02lX is a %d-byte message, "
+                            "got %d", (unsigned long)msg[0], want, nb);
 
     LV2_Atom_Sequence *seq =
         (LV2_Atom_Sequence *)(S.atom_arena + S.atom_off[s]);
@@ -873,9 +951,7 @@ double lv2_in_midi(double dep, double port, double frame,
     return dep;
 }
 
-/* ---------------------------------------------------------------- *
- * 8. run() -- the node-side operator
- * ---------------------------------------------------------------- */
+/* ---- 8. run() -- the node-side operator ---- */
 
 double lv2_process(double dep,
                    double id0, double v0, double id1, double v1,
@@ -892,7 +968,6 @@ double lv2_process(double dep,
      * instead of replaying queued events. */
     S.in_armed = 0;
 
-    /* Only control INPUTS are writable; anything else is ignored. */
     const double ids[LV2_HOST_PARAM_SLOTS]  = { id0, id1, id2, id3 };
     const double vals[LV2_HOST_PARAM_SLOTS] = { v0,  v1,  v2,  v3  };
     for (int i = 0; i < LV2_HOST_PARAM_SLOTS; i++) {
@@ -903,6 +978,7 @@ double lv2_process(double dep,
 
     for (long s = 0; s < S.n_atom; s++)
         if (!S.atom_in[s]) head_atom_out(s);
+    memset(S.side_in, 0, sizeof S.side_in);
 
     lilv_instance_run(S.inst, (uint32_t)S.block);
     S.n_process++;
@@ -917,9 +993,7 @@ double lv2_process(double dep,
     return (double)(++S.out_token);
 }
 
-/* ---------------------------------------------------------------- *
- * 9. The output block
- * ---------------------------------------------------------------- */
+/* ---- 9. The output block ---- */
 
 static int out_ok(double dep) {
     return S.open && isfinite(dep) && S.out_token != 0 &&

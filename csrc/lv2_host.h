@@ -48,6 +48,9 @@ extern "C" {
  * rsz:minimumSize: a few hundred small events per block. A declared
  * minimumSize is honoured exactly, whatever it is. */
 #define LV2_HOST_ATOM_BUF       8192
+/* The atom buffers live in one arena allocated at open; a manifest that
+ * asks for more than this in total is refused rather than allocated. */
+#define LV2_HOST_ATOM_ARENA_MAX (64u * 1024u * 1024u)
 
 /* ------------------------------------------------------------------ *
  * Driver-side lifecycle and discovery. Strings live here.
@@ -70,15 +73,19 @@ const char *lv2_host_scan_name(long i);
  * meaning as in lv2_host_scan; pass "" for the first plugin found).
  * `block_size` is the exact number of frames every process() call will
  * carry. `channels` is the number of host audio channels. The rule, for
- * inputs and outputs alike, is never to drop a channel: the k-th audio
- * input port receives host channel min(k, channels-1), so a mono host
- * feeds every input of a stereo plugin, but a plugin with fewer audio
- * inputs than `channels` is refused rather than leave a host channel
- * connected to nothing. The k-th audio output port writes host channel k,
- * or is discarded when k >= channels; when the plugin has fewer audio
- * outputs than `channels`, the last output repeats on the remaining
- * channels (a mono plugin is centre-panned); a plugin with no audio ports
- * at all is silent, which is the shape of a MIDI tool.
+ * inputs and outputs alike, is never to drop a channel. Only MAIN audio
+ * ports take part: a port marked lv2:isSideChain, or carrying (or
+ * grouped under) pg:sideChainOf, is non-main, as is any port outside a
+ * plugin-declared pg:mainInput / pg:mainOutput group; non-main inputs
+ * read a zeroed buffer and non-main outputs are discarded. The k-th
+ * main audio input receives host channel min(k, channels-1), so a mono
+ * host feeds every input of a stereo plugin, but a plugin with fewer
+ * main audio inputs than `channels` is refused rather than leave a host
+ * channel connected to nothing. The k-th main audio output writes host
+ * channel k, or is discarded when k >= channels; when the plugin has
+ * fewer main outputs than `channels`, the last one repeats on the
+ * remaining channels (a mono plugin is centre-panned); a plugin with no
+ * audio ports at all is silent, which is the shape of a MIDI tool.
  * Returns 0 on success, non-zero on failure (see lv2_host_last_error). */
 int lv2_host_open(const char *lv2_path, const char *uri,
                   double sample_rate, double block_size, double channels);
@@ -138,7 +145,8 @@ double lv2_host_atom_port_midi(double i);
  * rsz:minimumSize, or LV2_HOST_ATOM_BUF when undeclared. */
 double lv2_host_atom_port_size(double i);
 
-/* Port census, for a driver that wants to know what it opened. */
+/* Main audio port census (sidechain and non-main ports are excluded),
+ * for a driver that wants to know what it opened. */
 double lv2_host_n_audio_in(void);
 double lv2_host_n_audio_out(void);
 
@@ -150,7 +158,12 @@ long   lv2_host_n_process(void);
 void   lv2_host_reset_counters(void);
 
 /* ------------------------------------------------------------------ *
- * The input block. Same contract as clap_in_*.
+ * The input block. The shape is clap_in_*'s, with one difference in the
+ * contract: here a fill arms the block for exactly one lv2_process, which
+ * consumes the token -- afterwards lv2_in_sample returns NaN and a second
+ * lv2_process on the same dep refuses. The CLAP host leaves a consumed
+ * block readable and lets it run again; this host does not, so queued
+ * events can never replay.
  * ------------------------------------------------------------------ */
 
 /* Fill the input block and return its token. Both also re-head every atom
@@ -165,15 +178,18 @@ double lv2_in_sample(double dep, double i, double ch);
  * sample-accurate). `b0` is the status byte (0x80..0xFF); `b1` and `b2`
  * are the data bytes that follow (0x00..0x7F), a negative value or NaN
  * marking the message shorter -- a byte after such a marker is an error.
- * Events must be queued in non-decreasing frame order -- LV2 requires a
- * sorted sequence -- between the fill that arms a block and the
- * lv2_process that runs it. Returns `dep` on success, so queued events
- * chain into lv2_process the way clp_set chains into clp_process, and NaN
- * with a message in lv2_host_last_error: no open plugin, `dep` not naming
- * an armed block, `port` not a MIDI-declared atom input, `frame` outside
- * the block or out of order, a malformed byte, or the sequence buffer
- * full. A refused event also poisons the block: the next lv2_process
- * refuses rather than run without it. */
+ * The message must be complete for its status: 3 bytes for channel
+ * voices except 0xC0-0xDF (2 bytes), the listed system lengths for
+ * 0xF0-0xFF -- variable-length sysex is refused. Events must be queued
+ * in non-decreasing frame order -- LV2 requires a sorted sequence --
+ * between the fill that arms a block and the lv2_process that runs it.
+ * Returns `dep` on success, so queued events chain into lv2_process the
+ * way clp_set chains into clp_process, and NaN with a message in
+ * lv2_host_last_error: no open plugin, `dep` not naming an armed block,
+ * `port` not a MIDI-declared atom input, `frame` outside the block or
+ * out of order, a malformed or incomplete message, or the sequence
+ * buffer full. A refused event also poisons the block: the next
+ * lv2_process refuses rather than run without it. */
 double lv2_in_midi(double dep, double port, double frame,
                    double b0, double b1, double b2);
 
