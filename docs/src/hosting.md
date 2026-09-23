@@ -390,11 +390,18 @@ surfaced rather than compensated; the opt-in `compensate_latency` mode
 [`clap_open!`](@ref) offers has no LV2 counterpart.
 
 The host offers four features — `urid:map`, `urid:unmap`, `bufsz:fixedBlockLength` and
-`bufsz:boundedBlockLength` — and connects audio and control ports. A plugin that
-*requires* anything else (an atom, CV or event port, or another host feature) is refused
-at [`lv2_open!`](@ref) with a message naming what it asked for. An unconnected required
-port is undefined behaviour in the LV2 specification, so refusing is the honest answer;
-a plugin whose extras are optional opens fine.
+`bufsz:boundedBlockLength` — and connects audio, control and `atom:AtomPort` ports.
+An atom port gets one `atom:Sequence` buffer, sized from its declared
+`rsz:minimumSize`; timestamped MIDI events reach an input port through
+[`lv2_midi!`](@ref) with sample-accurate frame offsets, and an output sequence is kept
+valid for the plugin to write (its contents are not decoded). A plugin that *requires*
+anything else (an atom buffer type other than Sequence, a CV or event port, or another
+host feature such as `worker:schedule`) is refused at [`lv2_open!`](@ref) with a
+message naming what it asked for. An unconnected required port is undefined behaviour
+in the LV2 specification, so refusing is the honest answer; a plugin whose extras are
+optional opens fine. A plugin with fewer audio outputs than the requested channels has
+its last output repeated on the remaining channels, and one with no audio ports is
+silent — the shape of a MIDI tool.
 
 [`lv2_test_bundle`](@ref) compiles the same three test plugins as an LV2 bundle, so the
 LV2 path is proved against arithmetic that can be checked rather than against a

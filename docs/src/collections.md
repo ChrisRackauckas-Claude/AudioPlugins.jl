@@ -29,7 +29,7 @@ preference, for the reason given under
 | LSP Plugins — 198 plugins | [lsp-plugins](https://github.com/lsp-plugins/lsp-plugins) | LGPL-3.0-or-later | Shipped: `LSPPlugins_jll` 1.2.35 is registered and `lib/LSPPlugins` is in this repository. **Linux glibc only** (`x86_64` and `i686`), so it does not resolve on macOS or Windows |
 | Dragonfly Reverb | [dragonfly-reverb](https://github.com/michaelwillis/dragonfly-reverb) | GPL-3.0-or-later | Shipped: `DragonflyReverb_jll` 3.2.10 is registered and `lib/DragonflyReverb` is in this repository |
 | ZamPlugins | [zam-plugins](https://github.com/zamaudio/zam-plugins) | GPL-2.0-or-later for the sixteen plugins packaged; the upstream repository is not uniformly so (see below) | Shipped: `ZamPlugins_jll` 4.5.0 is registered and `lib/ZamPlugins` is in this repository |
-| x42-plugins | [x42-plugins](https://github.com/x42/x42-plugins) | none at the repository level — a meta-repo of submodules, each carrying its own (see below) | Investigated and not packaged: of the 54 plugins that build headless, this package's LV2 host can open 3 — see [Why x42-plugins is not packaged](@ref) |
+| x42-plugins | [x42-plugins](https://github.com/x42/x42-plugins) | none at the repository level — a meta-repo of submodules, each carrying its own (see below) | Investigated and not packaged: of the 54 plugins that build headless, this package's LV2 host can open 53 — see [Why x42-plugins is not packaged](@ref) |
 
 "Proposed" means exactly that: no recipe, no JLL, no sublibrary, and no commitment that
 one is coming. It is the list from
@@ -65,19 +65,21 @@ excluded from the JLL to keep the single label true rather than approximate.
 ### Why x42-plugins is not packaged
 
 The licensing resolves and 14 of its submodules build headless, producing 54 plugins that
-`lv2_scan` enumerates correctly. It is not packaged because the result would not be usable:
-of those 54, this package's LV2 host can open **three**. Forty-one need atom ports — that
-is all of the MIDI tooling — nine expose too few audio outputs for a two-channel host, and
-one needs `worker:schedule`.
+`lv2_scan` enumerates correctly. With atom-port support in `csrc/lv2_host.c` (sequence
+buffers plus timestamped MIDI input), **53** of the 54 open — the one holdout is
+`midimap`, which requires `worker:schedule`. The count needs `libfftw3f.so.3` on the
+loader path for the two `phaserotate` plugins, whose binaries link it; without it they
+are refused at instantiate (51 open) — a plugin dependency, not a host limitation.
 
 The two components [issue #39](https://github.com/SciML/AudioPlugins.jl/issues/39) names
 are unavailable for unrelated reasons: `fil4`, the parametric EQ, does not compile headless
 because its DSP includes `cairo.h` for the inline-display extension, and `meters` is in the
 GPL-3.0-or-later tier rather than the GPL-2.0-or-later one.
 
-So the blocker is atom-port support in `csrc/lv2_host.c`, not a missing recipe. Once the
-host can carry atom ports, x42 becomes worth packaging — most likely as two JLLs, split by
-licence tier.
+Packaging is now worth doing on the technical side — most likely as two JLLs, split by
+licence tier — but nothing is packaged yet: the atom-capable host ships in
+`LV2Host_jll` only after the Yggdrasil recipe is rebuilt, and a recipe for the x42
+bundles themselves does not exist.
 
 ### Airwindows
 

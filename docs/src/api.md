@@ -113,6 +113,7 @@ lv2_lib_path
 lv2_src_path
 lv2_default_path
 lv2_test_bundle
+lv2_midi_test_bundle
 ```
 
 ## LV2 hosting: lifecycle and discovery
@@ -147,6 +148,19 @@ than a format-assigned id, and its value is in the port's own plain units.
 lv2_params
 lv2_param_count
 lv2_param_value
+lv2_port_value
+```
+
+## LV2 hosting: atom ports and MIDI
+
+An `atom:AtomPort` is connected to one `atom:Sequence` buffer each, sized from
+the port's declared `rsz:minimumSize`. MIDI events reach an input sequence
+through `lv2_midi!`; an output sequence's contents are not decoded, only kept
+valid for the plugin to write.
+
+```@docs
+lv2_atom_ports
+lv2_midi!
 ```
 
 ## LV2 hosting: audio in and out
@@ -164,6 +178,7 @@ The LV2 half of the node-side surface, shaped exactly like the CLAP one above.
 AudioPlugins.lv2_in_tone
 AudioPlugins.lv2_process
 AudioPlugins.lv2_in_sample
+AudioPlugins.lv2_in_midi
 AudioPlugins.lv2_out_sample
 AudioPlugins.lv2_out_rms
 AudioPlugins.lv2_out_peak
