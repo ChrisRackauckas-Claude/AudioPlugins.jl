@@ -33,6 +33,7 @@ export build_clap_host!, clap_host_available, clap_lib_path, clap_src_path, clap
     clap_is_open, clap_last_error, clap_plugin_name,
     clap_params, clap_param_count, clap_latency, clap_compensating, clap_flush!,
     clap_block_size, clap_sample_rate, clap_n_process, clap_reset_counters!,
+    clap_n_audio_in, clap_n_audio_out,
     clap_plugin_index,
     clap_fill!, clap_out, clap_test_bundle,
     CLAP_WAVE_SILENCE, CLAP_WAVE_SINE, CLAP_WAVE_SQUARE,
@@ -317,6 +318,24 @@ this behaves exactly as it always did.
 [`clap_out`](@ref) and [`clap_flush!`](@ref). It is off by default: the
 documented behaviour is that [`clap_latency`](@ref) is surfaced, not
 compensated, and a generated C program linking `csrc/` never sees the mode.
+
+`channels` is the number of **host** channels — the width of the block
+[`clap_fill!`](@ref) supplies and [`clap_out`](@ref) returns — not the number
+of channels the plugin declares. At open, while still deactivated, the plugin
+is asked for its `clap.audio-ports` layout and is handed buffers matching it
+exactly: a plugin declaring two mono inputs and one mono output (a compressor
+with a mono sidechain, say) is wired `2 in / 1 out` whatever `channels` is.
+Host channel *k* feeds declared input channel *k*, with every input channel
+past `channels` fed by the last host channel — so at `channels = 1` the
+sidechain hears the same signal as the main input. Declared output channel *k*
+lands on host channel *k*, and output channels past `channels` are rendered
+into a sink. Asking for more output channels than the plugin declares — a
+mono-out plugin at `channels = 2` — fails at open with an error naming the
+layout, as do layouts with no main port or more ports or channels than the
+host holds. A plugin without `clap.audio-ports` is served one bus of
+`channels` channels each way, exactly as before. [`clap_n_audio_in`](@ref)
+and [`clap_n_audio_out`](@ref) report the declared channel totals of the
+plugin that ended up wired.
 """
 function clap_open!(
         path::AbstractString; plugin_id::AbstractString = "",
@@ -421,6 +440,30 @@ clap_n_process() = ccall((:clap_host_n_process, CLAP_LIB), Clong, ())
 Number of parameters the open plugin exposes, i.e. `length(clap_params())`.
 """
 clap_param_count() = ccall((:clap_host_n_params, CLAP_LIB), Clong, ())
+
+"""
+    clap_n_audio_in() -> Int
+
+Total number of audio channels the open plugin declared in its input
+direction, summed across its `clap.audio-ports` ports. A compressor with a
+mono main input and a mono sidechain reports `2` here even when
+[`clap_open!`](@ref) was called with `channels = 1`: the host channel count
+is how many channels the driver supplies, this is how many the plugin was
+wired for. `0` when nothing is open. A plugin that does not expose
+`clap.audio-ports` is wired as one port of `channels` channels each way and
+reports `channels`.
+"""
+clap_n_audio_in() = Int(ccall((:clap_host_n_audio_in, CLAP_LIB), Cdouble, ()))
+
+"""
+    clap_n_audio_out() -> Int
+
+Total number of audio channels the open plugin declared in its output
+direction, summed across its `clap.audio-ports` ports. See
+[`clap_n_audio_in`](@ref): this is the same number on the output side.
+`0` when nothing is open.
+"""
+clap_n_audio_out() = Int(ccall((:clap_host_n_audio_out, CLAP_LIB), Cdouble, ()))
 
 """
     clap_latency() -> Float64

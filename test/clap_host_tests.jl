@@ -26,6 +26,14 @@ const HOST_HAS_CHAIN = clap_host_available() && let h = Libdl.dlopen(clap_lib_pa
     ok
 end
 
+# Same gate for the audio-ports layout work: `clap_host_n_audio_in` is new in
+# the same build that starts asking plugins for their declared port layout.
+const HOST_HAS_PORTS = clap_host_available() && let h = Libdl.dlopen(clap_lib_path())
+    ok = Libdl.dlsym_e(h, :clap_host_n_audio_in) != C_NULL
+    Libdl.dlclose(h)
+    ok
+end
+
 # The eight-parameter fixture, built once. It is not part of `clap_test_bundle`
 # because that bundle's contents are documented and exercised by the README:
 # widening it would rewrite examples that have nothing to do with parameters.
@@ -36,6 +44,23 @@ function many_bundle()
     if !isfile(out)
         cc = AP._c_compiler()
         src = joinpath(@__DIR__, "plugins", "ap_test_manyparams.c")
+        run(`$cc $(AP._c_arch_flags()) -O2 -fPIC -shared -Wall -Wextra -o $out $src`)
+    end
+    return out
+end
+
+# The sidechain fixture, built once: two plugins whose declared audio layout
+# is not "one bus of `channels` channels each way" (test/plugins/
+# ap_test_sidechain.c). A host that never reads clap.audio-ports hands them
+# exactly that, and they refuse it outright -- which is what makes the
+# testset below a regression test for the old host rather than a new feature
+# test that only the new host could fail.
+function sidechain_bundle()
+    isempty(MANY_DIR[]) && (MANY_DIR[] = mktempdir())
+    out = joinpath(MANY_DIR[], "ap_sidechain.clap")
+    if !isfile(out)
+        cc = AP._c_compiler()
+        src = joinpath(@__DIR__, "plugins", "ap_test_sidechain.c")
         run(`$cc $(AP._c_arch_flags()) -O2 -fPIC -shared -Wall -Wextra -o $out $src`)
     end
     return out
@@ -438,6 +463,60 @@ else
                 clap_close!()
                 @test clap_plugin_index() == -1
                 @test isnan(AP.clp_expect(1.0, 0))
+            end
+        end
+
+        if !HOST_HAS_PORTS
+            @info "CLAPHost_jll $(clap_lib_path()) predates clap_host_n_audio_in: the " *
+                "declared-layout tests are covered by test/probe.c until it is rebuilt"
+        else
+            @testset "the plugin's declared audio layout is what process() gets" begin
+                # Two mono inputs (main + sidechain) and one mono output: the
+                # ZamComp layout a host-wide `channels` count cannot describe.
+                sc = sidechain_bundle()
+                plugs = clap_scan(sc)
+                @test [p.id for p in plugs] == ["ap.sidechain", "ap.sidechain.stereo"]
+
+                clap_open!(sc; plugin_id = "ap.sidechain", block_size = 64, channels = 1)
+                @test clap_n_audio_in() == 2
+                @test clap_n_audio_out() == 1
+                x = [sin(0.1 * i) for i in 0:63]
+                tok = clap_fill!(x)
+                y = clap_out(AP.clp_process(tok, -1, 0, -1, 0, -1, 0, -1, 0))
+                # Sidechain hears the one host channel: out == in * sidechain.
+                @test y ≈ Float32.(x) .* Float32.(x) atol = 1.0e-6
+                clap_close!()
+
+                # More host channels than the plugin has output channels is a
+                # refused open, not silent corruption.
+                @test_throws ErrorException clap_open!(
+                    sc; plugin_id = "ap.sidechain", block_size = 64, channels = 2
+                )
+                @test occursin("output channel", clap_last_error())
+                @test !clap_is_open()
+
+                # The stereo-out variant: the sidechain is host channel 1.
+                clap_open!(
+                    sc; plugin_id = "ap.sidechain.stereo", block_size = 64, channels = 2
+                )
+                @test clap_n_audio_in() == 2
+                @test clap_n_audio_out() == 2
+                inter = vec(permutedims([x fill(0.5, 64)]))
+                o = AP.clp_process(clap_fill!(inter; channels = 2), -1, 0, -1, 0, -1, 0, -1, 0)
+                @test clap_out(o; channel = 1) ≈ fill(0.5f0, 64) atol = 1.0e-6
+                @test clap_out(o; channel = 0) ≈ Float32.(x) .* 0.5f0 atol = 1.0e-6
+                clap_close!()
+
+                # The ordinary fixture declares one stereo port each way, so
+                # at channels = 1 it is wired for its declared two channels:
+                # the second input hears the last host channel and the second
+                # output renders into a sink.
+                clap_open!(BUNDLE; plugin_id = "ap.gain", block_size = 64, channels = 1)
+                @test clap_n_audio_in() == 2
+                @test clap_n_audio_out() == 2
+                clap_close!()
+                @test clap_n_audio_in() == 0
+                @test clap_n_audio_out() == 0
             end
         end
 
