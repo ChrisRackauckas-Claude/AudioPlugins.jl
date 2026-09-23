@@ -277,7 +277,7 @@ paths and [`clap_src_path`](@ref) / [`lv2_src_path`](@ref) the sources they were
 from.
 
 [`clap_host_available`](@ref) says whether the JLL has a build for this platform.
-`CLAPHost_jll` 1.0.1 builds for Linux, macOS and Windows, so in-process hosting runs on
+`CLAPHost_jll` builds for Linux, macOS and Windows, so in-process hosting runs on
 all three. Where a platform has no build, the package still loads and
 [`export_plugin`](@ref) still works, but the `clap_*` hosting calls cannot load the host;
 host from a C program over `csrc/clap_host.c` instead, as the test probes do.

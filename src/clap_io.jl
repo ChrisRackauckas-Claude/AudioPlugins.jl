@@ -82,7 +82,7 @@ end
     clap_host_available() -> Bool
 
 Whether `CLAPHost_jll` ships the prebuilt host for this platform. It does
-for Linux, macOS and Windows since 1.0.1. Where it does not, the module
+for Linux, macOS and Windows. Where it does not, the module
 loads and [`export_plugin`](@ref) works, but the `clap_*` hosting
 functions cannot load the host: host from a C program over
 `csrc/clap_host.c` instead, as `test/export/probe_step.c` does.

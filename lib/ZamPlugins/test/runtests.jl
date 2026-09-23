@@ -29,9 +29,12 @@ const DRIVABLE = Pair{String, Int}[
     "com.zamaudio.ZaMultiComp" => 1,
     "com.zamaudio.ZaMaximX2" => 2,
     "com.zamaudio.ZaMultiCompX2" => 2,
+    "com.zamaudio.ZamComp" => 1,
+    "com.zamaudio.ZamDynamicEQ" => 1,
+    "com.zamaudio.ZamGate" => 1,
+    "com.zamaudio.ZamCompX2" => 2,
+    "com.zamaudio.ZamGateX2" => 2,
 ]
-append!(DRIVABLE, (id => 1 for id in MONO_SIDECHAIN))
-append!(DRIVABLE, (id => 2 for id in STEREO_SIDECHAIN))
 
 @testset "ZamPlugins" begin
     @testset "loading the package registers all sixteen bundles" begin

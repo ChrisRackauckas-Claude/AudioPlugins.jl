@@ -57,7 +57,7 @@ magnitude than the CLAP and LV2 headers). `vst3sdk_jll` builds it once (pinned t
 build dependency, so the host library is self-contained and exports only its
 `extern "C"` surface.
 
-`CLAPHost_jll` 1.0.1 builds for Linux, macOS and Windows, so in-process hosting runs on
+`CLAPHost_jll` builds for Linux, macOS and Windows, so in-process hosting runs on
 all three. Where a platform has no build, the package still loads and authors plugins,
 `clap_host_available()` is `false`, and hosting is done from C over `csrc/clap_host.c`,
 as the test probes do.
