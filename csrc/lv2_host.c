@@ -8,9 +8,9 @@
  * lilv itself allocates during scan and open, which is driver-side.
  *
  * Built against lilv (ISC; https://gitlab.com/lv2/lilv), which brings
- * serd, sord, sratom and zix, and against the LV2 headers. The three LV2
- * headers this file needs are vendored under vendor/lv2 so a standalone
- * C build only has to find lilv.
+ * serd, sord, sratom and zix, and against the LV2 headers. The LV2 headers
+ * this file needs are vendored under vendor/lv2 so a standalone C build
+ * only has to find lilv.
  */
 
 #include "lv2_host.h"
@@ -20,6 +20,10 @@
 #include <lv2/core/lv2.h>
 #include <lv2/urid/urid.h>
 #include <lv2/buf-size/buf-size.h>
+#include <lv2/atom/atom.h>
+#include <lv2/atom/util.h>
+#include <lv2/midi/midi.h>
+#include <lv2/resize-port/resize-port.h>
 
 #include <lilv/lilv.h>
 
@@ -140,6 +144,24 @@ typedef struct {
      * are connected to the block buffers below, so their entry is unused. */
     float  ctrl[LV2_HOST_MAX_PORTS];
     signed char is_ctrl_in[LV2_HOST_MAX_PORTS];
+    signed char is_ctrl_out[LV2_HOST_MAX_PORTS];
+
+    /* Atom ports: each atom:AtomPort is connected to one atom:Sequence
+     * buffer carved out of `atom_arena`, which is a single allocation made
+     * at open and freed at close -- never in the processing path. Slots
+     * are numbered in port order; `atom_slot` maps a port index to its
+     * slot, or -1 for a non-atom port. */
+    long    n_atom;
+    long    atom_port[LV2_HOST_MAX_ATOM_PORTS];    /* port index of slot i */
+    long    atom_slot[LV2_HOST_MAX_PORTS];         /* port index -> slot */
+    size_t  atom_off[LV2_HOST_MAX_ATOM_PORTS];     /* byte offset in arena */
+    size_t  atom_cap[LV2_HOST_MAX_ATOM_PORTS];     /* buffer bytes per slot */
+    long    atom_nev[LV2_HOST_MAX_ATOM_PORTS];     /* events queued (input) */
+    int64_t atom_last[LV2_HOST_MAX_ATOM_PORTS];    /* last queued frame */
+    signed char atom_in[LV2_HOST_MAX_ATOM_PORTS];  /* 1 input, 0 output */
+    signed char atom_midi[LV2_HOST_MAX_ATOM_PORTS];/* 1 may carry MidiEvent */
+    uint8_t *atom_arena;
+    LV2_URID u_sequence, u_frametime, u_midievent;
 
     float  in[LV2_HOST_MAX_CHAN][LV2_HOST_MAX_BLOCK];
     float  out[LV2_HOST_MAX_CHAN][LV2_HOST_MAX_BLOCK];
@@ -162,6 +184,8 @@ static void free_world(void) {
         lilv_instance_free(S.inst);
         S.inst = NULL;
     }
+    free(S.atom_arena);
+    S.atom_arena = NULL;
     S.plugin = NULL;
     S.plugins = NULL;
     if (S.world) lilv_world_free(S.world);
@@ -260,6 +284,62 @@ static int port_has(const LilvPlugin *p, const LilvPort *port, const char *prop)
     return r;
 }
 
+/* The port's atom:bufferType values are the buffer types it accepts: the
+ * port is connectable when atom:Sequence is among them (or it declares
+ * none, Sequence being the default). `other` points at a static copy of
+ * the first non-Sequence value, for the error message when none fit. */
+static void atom_buffer_type(const LilvPlugin *p, const LilvPort *port,
+                             int *seq_ok, const char **other) {
+    static char other_uri[512];
+    LilvNode *pred = lilv_new_uri(S.world, LV2_ATOM__bufferType);
+    LilvNodes *vals = lilv_port_get_value(p, port, pred);
+    lilv_node_free(pred);
+    int saw_seq = 0, any = 0;
+    *other = NULL;
+    LILV_FOREACH (nodes, i, vals) {
+        const char *v = node_str(lilv_nodes_get(vals, i));
+        any = 1;
+        if (strcmp(v, LV2_ATOM__Sequence) == 0) saw_seq = 1;
+        else if (!*other) {
+            snprintf(other_uri, sizeof other_uri, "%s", v);
+            *other = other_uri;
+        }
+    }
+    lilv_nodes_free(vals);
+    *seq_ok = saw_seq || !any;
+}
+
+/* The port's declared rsz:minimumSize in bytes, or 0 when undeclared. */
+static long atom_min_size(const LilvPlugin *p, const LilvPort *port) {
+    LilvNode *pred = lilv_new_uri(S.world, LV2_RESIZE_PORT__minimumSize);
+    LilvNodes *vals = lilv_port_get_value(p, port, pred);
+    lilv_node_free(pred);
+    long r = 0;
+    if (vals) {
+        const LilvNode *v = lilv_nodes_get_first(vals);
+        if (v) r = lilv_node_is_int(v) ? (long)lilv_node_as_int(v)
+                                      : (long)lilv_node_as_float(v);
+        lilv_nodes_free(vals);
+    }
+    return r;
+}
+
+/* Whether the port may carry midi:MidiEvent: yes when atom:supports lists
+ * it, or when the port declares no atom:supports at all. */
+static int atom_midi_ok(const LilvPlugin *p, const LilvPort *port) {
+    LilvNode *pred = lilv_new_uri(S.world, LV2_ATOM__supports);
+    LilvNodes *vals = lilv_port_get_value(p, port, pred);
+    lilv_node_free(pred);
+    int any = 0, midi = 0;
+    LILV_FOREACH (nodes, i, vals) {
+        any = 1;
+        if (strcmp(node_str(lilv_nodes_get(vals, i)), LV2_MIDI__MidiEvent) == 0)
+            midi = 1;
+    }
+    lilv_nodes_free(vals);
+    return !any || midi;
+}
+
 static void fail_open(void) { lv2_host_close(); }
 
 int lv2_host_open(const char *lv2_path, const char *uri,
@@ -331,6 +411,9 @@ int lv2_host_open(const char *lv2_path, const char *uri,
     S.n_params = 0;
     S.latency_port = -1;
     memset(S.is_ctrl_in, 0, sizeof S.is_ctrl_in);
+    memset(S.is_ctrl_out, 0, sizeof S.is_ctrl_out);
+    S.n_atom = 0;
+    memset(S.atom_slot, -1, sizeof S.atom_slot);
 
     /* Ranges for every port in one call (lilv's recommended way). */
     float *mins = (float *)calloc((size_t)S.n_ports, sizeof(float));
@@ -344,8 +427,11 @@ int lv2_host_open(const char *lv2_path, const char *uri,
     }
     lilv_plugin_get_port_ranges_float(p, mins, maxs, defs);
 
-    typedef enum { K_AUDIO_IN, K_AUDIO_OUT, K_CTRL_IN, K_CTRL_OUT, K_NONE } kind_t;
+    typedef enum {
+        K_AUDIO_IN, K_AUDIO_OUT, K_CTRL_IN, K_CTRL_OUT, K_ATOM_IN, K_ATOM_OUT, K_NONE
+    } kind_t;
     kind_t kind[LV2_HOST_MAX_PORTS];
+    size_t arena_bytes = 0;
 
     for (long k = 0; k < S.n_ports; k++) {
         const LilvPort *port = lilv_plugin_get_port_by_index(p, (uint32_t)k);
@@ -354,6 +440,7 @@ int lv2_host_open(const char *lv2_path, const char *uri,
         int is_out = port_is(p, port, LILV_URI_OUTPUT_PORT);
         int audio  = port_is(p, port, LILV_URI_AUDIO_PORT);
         int ctrl   = port_is(p, port, LILV_URI_CONTROL_PORT);
+        int atom   = port_is(p, port, LILV_URI_ATOM_PORT);
 
         if (audio && is_in)       { kind[k] = K_AUDIO_IN;  S.n_audio_in++;  }
         else if (audio && is_out) { kind[k] = K_AUDIO_OUT; S.n_audio_out++; }
@@ -375,32 +462,86 @@ int lv2_host_open(const char *lv2_path, const char *uri,
                 snprintf(S.p_sym[j], sizeof S.p_sym[0], "%s", sym);
             }
         }
-        else if (ctrl && is_out) { kind[k] = K_CTRL_OUT; S.ctrl[k] = 0.0f; }
+        else if (ctrl && is_out) { kind[k] = K_CTRL_OUT; S.is_ctrl_out[k] = 1; S.ctrl[k] = 0.0f; }
+        else if (atom && (is_in || is_out)) {
+            /* An AtomPort's buffer is a single atom; this host carries
+             * atom:Sequence, the default and the only bufferType that moves
+             * MIDI. Another declared bufferType is not an error unless the
+             * port is required -- then it is named. */
+            int seq_ok; const char *other;
+            atom_buffer_type(p, port, &seq_ok, &other);
+            if (!seq_ok) {
+                if (port_has(p, port, LV2_CORE__connectionOptional)) { kind[k] = K_NONE; }
+                else {
+                    set_err("plugin '%s' port %ld ('%s') is a required atom port with "
+                            "bufferType <%s>, which this host cannot connect "
+                            "(only atom:Sequence is supported)",
+                            S.plugin_uri, k, sym, other);
+                    free(mins); free(maxs); free(defs);
+                    fail_open();
+                    return 1;
+                }
+            } else if (S.n_atom >= LV2_HOST_MAX_ATOM_PORTS) {
+                set_err("plugin '%s' has more than %d atom ports, which this host "
+                        "cannot connect", S.plugin_uri, LV2_HOST_MAX_ATOM_PORTS);
+                free(mins); free(maxs); free(defs);
+                fail_open();
+                return 1;
+            } else {
+                long s = S.n_atom++;
+                kind[k] = is_in ? K_ATOM_IN : K_ATOM_OUT;
+                S.atom_slot[k] = s;
+                S.atom_port[s] = k;
+                S.atom_in[s]   = is_in;
+                S.atom_midi[s] = (signed char)atom_midi_ok(p, port);
+                long msz = atom_min_size(p, port);
+                S.atom_cap[s]  = (size_t)(msz > LV2_HOST_ATOM_BUF ? msz : LV2_HOST_ATOM_BUF);
+                S.atom_cap[s]  = (S.atom_cap[s] + 7u) & ~(size_t)7u;
+                S.atom_off[s]  = arena_bytes;
+                arena_bytes   += S.atom_cap[s];
+                S.atom_nev[s]  = 0;
+                S.atom_last[s] = -1;
+            }
+        }
         else if (port_has(p, port, LV2_CORE__connectionOptional)) { kind[k] = K_NONE; }
         else {
-            /* Atom, CV, event, or something newer: a required port of a
+            /* CV, event, or something newer: a required port of a
              * class this host cannot feed. Say which. */
-            const char *cls = port_is(p, port, LILV_URI_ATOM_PORT) ? "atom" :
-                              port_is(p, port, LILV_URI_CV_PORT)   ? "CV"   :
-                              port_is(p, port, LILV_URI_EVENT_PORT) ? "event" : "unknown-class";
+            const char *cls = port_is(p, port, LILV_URI_CV_PORT)     ? "CV"    :
+                              port_is(p, port, LILV_URI_EVENT_PORT)  ? "event" :
+                              port_is(p, port, LILV_URI_ATOM_PORT)   ? "atom"  : "unknown-class";
             set_err("plugin '%s' port %ld ('%s') is a required %s port, which this host "
-                    "cannot connect (only audio and control ports are supported)",
-                    S.plugin_uri, k, sym, cls);
+                    "cannot connect", S.plugin_uri, k, sym, cls);
             free(mins); free(maxs); free(defs);
             fail_open();
             return 1;
         }
     }
     free(mins); free(maxs); free(defs);
-
-    if (S.n_audio_out < ch) {
-        set_err("plugin '%s' has %ld audio output port(s), fewer than the %ld channel(s) asked for",
-                S.plugin_uri, S.n_audio_out, ch);
-        fail_open();
-        return 1;
-    }
     if (lilv_plugin_has_latency(p))
         S.latency_port = (long)lilv_plugin_get_latency_port_index(p);
+
+    if (S.n_atom > 0) {
+        S.atom_arena = (uint8_t *)malloc(arena_bytes);
+        if (!S.atom_arena) {
+            set_err("out of memory allocating %zu bytes of atom buffers for '%s'",
+                    arena_bytes, S.plugin_uri);
+            fail_open();
+            return 1;
+        }
+        /* The URIDs the host itself needs: the type it stamps on every
+         * sequence it prepares, the time unit of the events it queues, and
+         * the type of those events. 0 means the map table is full, which a
+         * plugin this size is far from. */
+        S.u_sequence  = urid_map(NULL, LV2_ATOM__Sequence);
+        S.u_frametime = urid_map(NULL, LV2_ATOM__frameTime);
+        S.u_midievent = urid_map(NULL, LV2_MIDI__MidiEvent);
+        if (!S.u_sequence || !S.u_frametime || !S.u_midievent) {
+            set_err("URID map table full while mapping atom types for '%s'", S.plugin_uri);
+            fail_open();
+            return 1;
+        }
+    }
 
     S.inst = lilv_plugin_instantiate(p, sample_rate, FEATURES);
     if (!S.inst) {
@@ -427,6 +568,22 @@ int lv2_host_open(const char *lv2_path, const char *uri,
         case K_CTRL_OUT:
             lilv_instance_connect_port(S.inst, (uint32_t)k, &S.ctrl[k]);
             break;
+        case K_ATOM_IN:
+        case K_ATOM_OUT: {
+            long s = S.atom_slot[k];
+            LV2_Atom_Sequence *seq =
+                (LV2_Atom_Sequence *)(S.atom_arena + S.atom_off[s]);
+            lilv_instance_connect_port(S.inst, (uint32_t)k, seq);
+            /* A valid sequence even before the first block: inputs empty,
+             * outputs at full capacity, exactly as each block re-heads
+             * them. */
+            seq->atom.type = S.u_sequence;
+            seq->atom.size = S.atom_in[s] ? (uint32_t)sizeof(LV2_Atom_Sequence_Body)
+                                          : (uint32_t)S.atom_cap[s];
+            seq->body.unit = S.u_frametime;
+            seq->body.pad  = 0;
+            break;
+        }
         case K_NONE:
             lilv_instance_connect_port(S.inst, (uint32_t)k, NULL);
             break;
@@ -454,6 +611,9 @@ void lv2_host_close(void) {
     S.n_ports = 0;
     S.n_audio_in = S.n_audio_out = 0;
     S.latency_port = -1;
+    S.n_atom = 0;
+    memset(S.atom_slot, -1, sizeof S.atom_slot);
+    S.u_sequence = S.u_frametime = S.u_midievent = 0;
     S.in_token = S.out_token = 0;
     S.in_n = S.out_n = 0;
     S.n_process = 0;
@@ -488,6 +648,41 @@ double lv2_host_param_value(double port_index) {
     return (double)S.ctrl[k];
 }
 
+double lv2_host_port_value(double port_index) {
+    if (!S.open) return NAN;
+    long k = (long)(port_index + 0.5);
+    if (k < 0 || k >= S.n_ports || (!S.is_ctrl_in[k] && !S.is_ctrl_out[k])) return NAN;
+    return (double)S.ctrl[k];
+}
+
+/* ---------------------------------------------------------------- *
+ * 6b. Atom ports
+ * ---------------------------------------------------------------- */
+
+static int aidx(long i) { return (i >= 0 && i < S.n_atom); }
+
+double lv2_host_n_atom_ports(void) { return S.open ? (double)S.n_atom : 0.0; }
+
+double lv2_host_atom_port_index(double i) {
+    long s = (long)(i + 0.5);
+    return (S.open && aidx(s)) ? (double)S.atom_port[s] : NAN;
+}
+
+double lv2_host_atom_port_is_input(double i) {
+    long s = (long)(i + 0.5);
+    return (S.open && aidx(s)) ? (double)S.atom_in[s] : NAN;
+}
+
+double lv2_host_atom_port_midi(double i) {
+    long s = (long)(i + 0.5);
+    return (S.open && aidx(s)) ? (double)S.atom_midi[s] : NAN;
+}
+
+double lv2_host_atom_port_size(double i) {
+    long s = (long)(i + 0.5);
+    return (S.open && aidx(s)) ? (double)S.atom_cap[s] : NAN;
+}
+
 double lv2_host_latency(void) {
     if (!S.open || S.latency_port < 0) return 0.0;
     return (double)S.ctrl[S.latency_port];
@@ -506,6 +701,23 @@ void   lv2_host_reset_counters(void) { S.n_process = 0; }
  * 7. The input block
  * ---------------------------------------------------------------- */
 
+/* A new input block carries no events: every atom input port's sequence
+ * is re-headed to empty (in frame time), and the ordering cursor restarts.
+ * Called by lv2_in_fill and lv2_in_tone, the two ways a block is armed. */
+static void rehead_atom_inputs(void) {
+    for (long s = 0; s < S.n_atom; s++) {
+        if (!S.atom_in[s]) continue;
+        LV2_Atom_Sequence *seq =
+            (LV2_Atom_Sequence *)(S.atom_arena + S.atom_off[s]);
+        seq->atom.type = S.u_sequence;
+        seq->atom.size = (uint32_t)sizeof(LV2_Atom_Sequence_Body);
+        seq->body.unit = S.u_frametime;
+        seq->body.pad  = 0;
+        S.atom_nev[s]  = 0;
+        S.atom_last[s] = -1;
+    }
+}
+
 double lv2_in_fill(const double *samples, long n, long channels) {
     if (!S.open) { set_err("no plugin is open"); return NAN; }
     if (!samples || n < 0) { set_err("lv2_in_fill: no samples"); return NAN; }
@@ -518,6 +730,7 @@ double lv2_in_fill(const double *samples, long n, long channels) {
         }
     for (long i = n; i < S.block; i++)
         for (long c = 0; c < S.chan; c++) S.in[c][i] = 0.0f;
+    rehead_atom_inputs();
     S.in_n = n;
     return (double)(++S.in_token);
 }
@@ -542,6 +755,7 @@ double lv2_in_tone(double t, double waveform, double freq, double amp) {
         double v = wave_at(first + i, w, freq, amp);
         for (long c = 0; c < S.chan; c++) S.in[c][i] = (float)v;
     }
+    rehead_atom_inputs();
     S.in_n = S.block;
     return (double)(++S.in_token);
 }
@@ -552,6 +766,77 @@ double lv2_in_sample(double dep, double i, double ch) {
     long k = (long)(i + 0.5), c = (long)(ch + 0.5);
     if (k < 0 || k >= S.in_n || c < 0 || c >= S.chan) return NAN;
     return (double)S.in[c][k];
+}
+
+double lv2_in_midi(double port, double frame, double b0, double b1, double b2) {
+    if (!S.open) { set_err("no plugin is open"); return NAN; }
+    if (!S.in_token) {
+        set_err("lv2_in_midi: no input block; call lv2_in_fill or lv2_in_tone first");
+        return NAN;
+    }
+    long k = (long)(port + 0.5);
+    if (k < 0 || k >= S.n_ports || S.atom_slot[k] < 0) {
+        set_err("lv2_in_midi: port %ld is not an atom port", k);
+        return NAN;
+    }
+    long s = S.atom_slot[k];
+    if (!S.atom_in[s]) {
+        set_err("lv2_in_midi: port %ld is an atom output, not an input", k);
+        return NAN;
+    }
+    if (!S.atom_midi[s]) {
+        set_err("lv2_in_midi: port %ld does not accept midi:MidiEvent "
+                "(its atom:supports excludes it)", k);
+        return NAN;
+    }
+    long f = (long)(frame + 0.5);
+    if (f < 0 || f >= S.block) {
+        set_err("lv2_in_midi: frame %ld is outside the block (0..%ld)", f, S.block - 1);
+        return NAN;
+    }
+    if (f < S.atom_last[s]) {
+        set_err("lv2_in_midi: event at frame %ld is out of order after frame %lld "
+                "(events must be queued in non-decreasing frame order)",
+                f, (long long)S.atom_last[s]);
+        return NAN;
+    }
+    const double bytes[3] = { b0, b1, b2 };
+    uint8_t msg[3];
+    int nb = 0;
+    for (int i = 0; i < 3; i++) {
+        if (isnan(bytes[i]) || bytes[i] < 0) break;
+        long b = (long)(bytes[i] + 0.5);
+        if (b > 255) {
+            set_err("lv2_in_midi: byte %d of the message is %ld, not a MIDI byte", i, b);
+            return NAN;
+        }
+        msg[nb++] = (uint8_t)b;
+    }
+    if (nb == 0) {
+        set_err("lv2_in_midi: a MIDI event needs at least a status byte");
+        return NAN;
+    }
+
+    LV2_Atom_Sequence *seq =
+        (LV2_Atom_Sequence *)(S.atom_arena + S.atom_off[s]);
+    /* The sequence atom's size field counts everything after the 8-byte
+     * LV2_Atom header, so the most it can hold is the port's capacity less
+     * that header -- the same bound lv2_atom_sequence_append_event checks. */
+    const uint32_t cap   = (uint32_t)(S.atom_cap[s] - sizeof(LV2_Atom));
+    const uint32_t total = (uint32_t)sizeof(LV2_Atom_Event) + (uint32_t)nb;
+    if (cap - seq->atom.size < total) {
+        set_err("lv2_in_midi: atom input sequence on port %ld is full "
+                "(%u bytes capacity)", k, cap);
+        return NAN;
+    }
+    LV2_Atom_Event *e = lv2_atom_sequence_end(&seq->body, seq->atom.size);
+    e->time.frames = (int64_t)f;
+    e->body.size   = (uint32_t)nb;
+    e->body.type   = S.u_midievent;
+    memcpy(LV2_ATOM_BODY(&e->body), msg, (size_t)nb);
+    seq->atom.size += lv2_atom_pad_size(total);
+    S.atom_last[s] = f;
+    return (double)(++S.atom_nev[s]);
 }
 
 /* ---------------------------------------------------------------- *
@@ -575,8 +860,30 @@ double lv2_process(double dep,
         if (k < S.n_ports && S.is_ctrl_in[k]) S.ctrl[k] = (float)vals[i];
     }
 
+    /* An atom output port's buffer is presented to the plugin each run as
+     * one empty atom:Sequence whose atom.size is the buffer's capacity --
+     * the plugin reads that field to learn how much it may write, then
+     * rewrites the header itself. Whatever it left is valid for the block. */
+    for (long s = 0; s < S.n_atom; s++) {
+        if (S.atom_in[s]) continue;
+        LV2_Atom_Sequence *seq =
+            (LV2_Atom_Sequence *)(S.atom_arena + S.atom_off[s]);
+        seq->atom.type = S.u_sequence;
+        seq->atom.size = (uint32_t)S.atom_cap[s];
+        seq->body.unit = 0;
+        seq->body.pad  = 0;
+    }
+
     lilv_instance_run(S.inst, (uint32_t)S.block);
     S.n_process++;
+
+    /* Fewer audio outputs than host channels: repeat the last output on
+     * the remaining channels (a mono plugin is centre-panned). With no
+     * audio outputs at all the channels hold the silence open() wrote. */
+    for (long c = S.n_audio_out; c < S.chan && S.n_audio_out > 0; c++)
+        memcpy(S.out[c], S.out[S.n_audio_out - 1],
+               (size_t)S.block * sizeof(float));
+
     S.out_n = S.block;
     return (double)(++S.out_token);
 }

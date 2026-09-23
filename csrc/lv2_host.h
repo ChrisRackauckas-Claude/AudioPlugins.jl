@@ -20,8 +20,13 @@
  *
  * Which plugins this host can open: those whose required features are a
  * subset of what it provides (urid:map, urid:unmap, bufsz:fixedBlockLength,
- * bufsz:boundedBlockLength) and whose ports are audio, control, or
- * connection-optional. A plugin that requires an atom, CV or event port,
+ * bufsz:boundedBlockLength) and whose ports are audio, control,
+ * connection-optional, or atom:AtomPort with atom:Sequence buffer type.
+ * Atom ports are connected to one sequence buffer each, sized from the
+ * port's declared rsz:minimumSize (LV2_HOST_ATOM_BUF when undeclared):
+ * MIDI events reach an input sequence through lv2_in_midi, and an output
+ * sequence is re-headed to its full capacity before every run(). A plugin
+ * that requires a CV or event port, an atom port of another buffer type,
  * or a host feature this host does not offer, is refused at open with a
  * message that says which. Refusing is the honest answer: an unconnected
  * required port is undefined behaviour in the LV2 spec.
@@ -33,11 +38,16 @@
 extern "C" {
 #endif
 
-#define LV2_HOST_MAX_BLOCK   8192
-#define LV2_HOST_MAX_CHAN    2
-#define LV2_HOST_MAX_PORTS   256
-#define LV2_HOST_MAX_PARAMS  64
-#define LV2_HOST_PARAM_SLOTS 4
+#define LV2_HOST_MAX_BLOCK      8192
+#define LV2_HOST_MAX_CHAN       2
+#define LV2_HOST_MAX_PORTS      256
+#define LV2_HOST_MAX_PARAMS     64
+#define LV2_HOST_PARAM_SLOTS    4
+#define LV2_HOST_MAX_ATOM_PORTS 32
+/* Floor for an atom port's buffer when the manifest declares no
+ * rsz:minimumSize: a few hundred small events per block. A declared
+ * minimumSize is honoured exactly, whatever it is. */
+#define LV2_HOST_ATOM_BUF       8192
 
 /* ------------------------------------------------------------------ *
  * Driver-side lifecycle and discovery. Strings live here.
@@ -62,9 +72,11 @@ const char *lv2_host_scan_name(long i);
  * carry. `channels` is the number of host audio channels: the k-th audio
  * input port receives host channel min(k, channels-1) (so a mono host
  * feeds every input of a stereo plugin), and the k-th audio output port
- * writes host channel k, or is discarded when k >= channels. The plugin
- * must have at least `channels` audio output ports. Returns 0 on success,
- * non-zero on failure (see lv2_host_last_error). */
+ * writes host channel k, or is discarded when k >= channels. When the
+ * plugin has fewer audio outputs than `channels`, the last output repeats
+ * on the remaining channels (a mono plugin is centre-panned); a plugin
+ * with no audio ports at all is silent, which is the shape of a MIDI tool.
+ * Returns 0 on success, non-zero on failure (see lv2_host_last_error). */
 int lv2_host_open(const char *lv2_path, const char *uri,
                   double sample_rate, double block_size, double channels);
 
@@ -91,11 +103,38 @@ const char *lv2_host_param_symbol(long i);
  * NaN for an index that is not a control input. */
 double lv2_host_param_value(double port_index);
 
+/* The value currently connected to a control port, by port index, input
+ * or output: how a control OUTPUT port (other than the designated latency
+ * port, which lv2_host_latency covers) is read. NaN for an index that is
+ * not a control port. */
+double lv2_host_port_value(double port_index);
+
 /* Latency the plugin reports on its lv2:latency port, in samples; 0 when
  * it has no such port. A plugin writes this port from run(), so the value
  * is authoritative after the first block (the test plugins also set it in
  * activate). NOT COMPENSATED -- see clap_host.h. */
 double lv2_host_latency(void);
+
+/* ------------------------------------------------------------------ *
+ * Atom ports. Each atom:AtomPort is connected to one atom:Sequence
+ * buffer; the functions below enumerate them (in scan order, not port
+ * order) so a caller can find which port index carries MIDI.
+ * ------------------------------------------------------------------ */
+
+/* Number of atom ports the open plugin has (0 when none or nothing open). */
+double lv2_host_n_atom_ports(void);
+/* Port index of the i-th atom port; NaN when i is out of range. */
+double lv2_host_atom_port_index(double i);
+/* 1.0 when the i-th atom port is an input, 0.0 when an output. */
+double lv2_host_atom_port_is_input(double i);
+/* 1.0 when the i-th atom port may carry midi:MidiEvent: either it declares
+ * atom:supports midi:MidiEvent, or it declares no atom:supports at all.
+ * 0.0 when it declares supports that exclude MidiEvent -- lv2_in_midi
+ * refuses such a port. */
+double lv2_host_atom_port_midi(double i);
+/* Bytes of sequence buffer connected to the i-th atom port: the declared
+ * rsz:minimumSize, or LV2_HOST_ATOM_BUF when undeclared. */
+double lv2_host_atom_port_size(double i);
 
 /* Port census, for a driver that wants to know what it opened. */
 double lv2_host_n_audio_in(void);
@@ -112,9 +151,25 @@ void   lv2_host_reset_counters(void);
  * The input block. Same contract as clap_in_*.
  * ------------------------------------------------------------------ */
 
+/* Fill the input block and return its token. Both also re-head every atom
+ * input sequence to empty and discard any MIDI events queued for the
+ * previous block: a block's events are queued after the fill that arms it. */
 double lv2_in_fill(const double *samples, long n, long channels);
 double lv2_in_tone(double t, double waveform, double freq, double amp);
 double lv2_in_sample(double dep, double i, double ch);
+
+/* Append one MIDI event to the input atom:Sequence of atom input port
+ * `port`, at `frame` samples into the current block (0-based, so
+ * sample-accurate). `b0` is the first (status) byte; `b1` and `b2` are the
+ * following bytes, a negative value or NaN marking the message shorter.
+ * Events must be queued in non-decreasing frame order -- LV2 requires a
+ * sorted sequence -- between the fill that arms a block and the
+ * lv2_process that runs it. Returns the number of events in that port's
+ * sequence for this block, or NaN with a message in lv2_host_last_error:
+ * no open plugin, no armed block, `port` not an atom input, the port not
+ * accepting MidiEvent, `frame` outside the block or out of order, or the
+ * sequence buffer full. */
+double lv2_in_midi(double port, double frame, double b0, double b1, double b2);
 
 #define LV2_WAVE_SILENCE 0
 #define LV2_WAVE_SINE    1
