@@ -28,14 +28,18 @@ is versioned and `clap_host.c` checks `clap_version_is_compatible` at load.
 |---|---|
 | Upstream | https://lv2plug.in (https://gitlab.com/lv2/lv2) |
 | Version | 1.18.10 (`lv2-1.18.10.tar.xz`, sha256 `78c51bcf21b54e58bb6329accbb4dae03b2ed79b520f9a01e734bd9de530953f`) |
-| Vendored | 2026-08-29, three headers copied verbatim from `include/lv2/`: `core/lv2.h`, `urid/urid.h`, `buf-size/buf-size.h` |
+| Vendored | 2026-08-29, three headers copied verbatim from `include/lv2/`: `core/lv2.h`, `urid/urid.h`, `buf-size/buf-size.h`. 2026-09-23, four more verbatim for atom-port support: `atom/atom.h`, `atom/util.h`, `midi/midi.h`, `resize-port/resize-port.h` |
 | Licence | ISC — see `LV2-ISC-LICENSE` |
 
 Only the headers the sources here need: `core/lv2.h` for the plugin ABI
 (the test plugins and the host), `urid/urid.h` and `buf-size/buf-size.h` for
-the host features `lv2_host.c` offers. The full specification — every other
-extension header plus the Turtle bundles lilv reads at run time — comes from
-`lv2_jll`, and `lv2_host.c` is built against lilv (`Lilv_jll`), which is why
-it includes these through the include path (`-I csrc/vendor`) rather than by
-relative path: lilv's own headers include `<lv2/core/lv2.h>` too, and both
-must resolve to the same copy.
+the host features `lv2_host.c` offers, `atom/atom.h` + `atom/util.h` for the
+`atom:Sequence` buffers the host connects to `atom:AtomPort`s, `midi/midi.h`
+for `midi:MidiEvent` (the event type `lv2_in_midi` writes and the test
+plugins read), and `resize-port/resize-port.h` for `rsz:minimumSize` (the
+port property the buffers are sized from). The full specification — every
+other extension header plus the Turtle bundles lilv reads at run time —
+comes from `lv2_jll`, and `lv2_host.c` is built against lilv (`Lilv_jll`),
+which is why it includes these through the include path (`-I csrc/vendor`)
+rather than by relative path: lilv's own headers include `<lv2/core/lv2.h>`
+too, and both must resolve to the same copy.
