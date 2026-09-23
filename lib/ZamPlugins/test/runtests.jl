@@ -7,27 +7,15 @@ using Test
 using AudioPlugins
 using ZamPlugins
 using ZamPlugins_jll
-using Libdl
 
-# Whether the CLAP host library asks plugins for their declared audio-port
-# layout. The prebuilt JLL exports `clap_host_n_audio_in` iff it was built
-# from the audio-ports source; the dlsym check is what lets this file express
-# the correct semantics now and still run against an older artifact.
-const PORTS_HOST = let h = Libdl.dlopen(clap_lib_path())
-    ok = Libdl.dlsym_e(h, :clap_host_n_audio_in) != C_NULL
-    Libdl.dlclose(h)
-    ok
-end
+# Whether the CLAP host library was built with the audio-ports scan: the
+# prebuilt JLL exports `clap_host_n_audio_in` iff it was.
+const PORTS_HOST = AudioPlugins._host_exports(:clap_host_n_audio_in)
 
-# Channel count per plugin is the number of *host* channels the audio block
-# carries, not the plugin's declared channel total. The `MONO_SIDECHAIN` three
-# declare a mono main input plus a mono sidechain input but only one output,
-# so a single host channel serves them -- the sidechain hears that same
-# channel -- and the `STEREO_SIDECHAIN` pair declares stereo mains plus the
-# sidechain, so two serve them. A host built before the audio-ports scan never
-# asked: it passed `channels` on every bus, which is the layout DPF's CLAP
-# glue asserts against, so under it the mono-plus-sidechain plugins ran only
-# at two host channels and the stereo-sidechain pair could not run at all.
+# `channels` is host channels, not the plugin's declared channel total. A
+# port-blind host passed `channels` on every bus -- the mislayout DPF asserts
+# against -- so the sidechain plugins are driven only under a host that reads
+# the declared layout, and their aux inputs then read silence.
 const MONO_SIDECHAIN = [
     "com.zamaudio.ZamComp", "com.zamaudio.ZamDynamicEQ", "com.zamaudio.ZamGate",
 ]
@@ -46,8 +34,10 @@ const DRIVABLE = Pair{String, Int}[
     "com.zamaudio.ZaMaximX2" => 2,
     "com.zamaudio.ZaMultiCompX2" => 2,
 ]
-append!(DRIVABLE, (id => (PORTS_HOST ? 1 : 2) for id in MONO_SIDECHAIN))
-PORTS_HOST && append!(DRIVABLE, (id => 2 for id in STEREO_SIDECHAIN))
+if PORTS_HOST
+    append!(DRIVABLE, (id => 1 for id in MONO_SIDECHAIN))
+    append!(DRIVABLE, (id => 2 for id in STEREO_SIDECHAIN))
+end
 
 @testset "ZamPlugins" begin
     @testset "loading the package registers all sixteen bundles" begin
@@ -60,9 +50,14 @@ PORTS_HOST && append!(DRIVABLE, (id => 2 for id in STEREO_SIDECHAIN))
 
     @testset "every plugin is there, under com.zamaudio." begin
         ids = sort([p.id for p in plugins(ZamPlugins_jll)])
-        # Under the port-blind host the stereo-sidechain pair cannot be driven,
-        # so they are accounted for here rather than in DRIVABLE.
-        @test ids == sort([first.(DRIVABLE); PORTS_HOST ? String[] : STEREO_SIDECHAIN])
+        # Under the port-blind host the sidechain plugins cannot be driven
+        # without the mislayout; they are accounted for here, not in DRIVABLE.
+        @test ids == sort(
+            [
+                first.(DRIVABLE)
+                PORTS_HOST ? String[] : [MONO_SIDECHAIN; STEREO_SIDECHAIN]
+            ]
+        )
         # The two convolution plugins are excluded on licence grounds -- they link
         # GPL-3.0-or-later zita-convolver -- so their absence is a property of the
         # collection, not an accident of the build.
@@ -73,9 +68,6 @@ PORTS_HOST && append!(DRIVABLE, (id => 2 for id in STEREO_SIDECHAIN))
         clap_open!(id; sample_rate = 48000, block_size = 64, channels = ch)
         @test clap_is_open()
         if PORTS_HOST
-            # The wired layout is the declared one, not `channels` on every
-            # bus: a mono-plus-sidechain plugin reports 2 in / 1 out at
-            # channels = 1, a stereo-plus-sidechain one 3 in / 2 out at 2.
             want_in = id in MONO_SIDECHAIN ? 2 : id in STEREO_SIDECHAIN ? 3 : ch
             @test clap_n_audio_in() == want_in
             @test clap_n_audio_out() == ch

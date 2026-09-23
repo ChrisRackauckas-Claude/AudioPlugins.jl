@@ -116,17 +116,18 @@ const char *clap_host_scan_feature(long i, long k);
  * `channels` is the number of host audio channels, which is not the
  * plugin's own layout. The plugin is read for clap.audio-ports while still
  * deactivated and is handed exactly the ports and channel counts it
- * declares -- never more: declared input channel k receives host channel
- * min(k, channels-1) (a mono host feeds every input of a stereo plugin,
- * and a sidechain the last channel it has), and declared output channel k
- * writes host channel k, or the sink when k >= channels. The plugin must
- * therefore declare at least `channels` output channels, and a layout this
- * host cannot serve -- more ports than CLAP_HOST_MAX_PORTS, more channels
- * than CLAP_HOST_MAX_PORT_CHAN, a main port that is not first, or too few
- * output channels -- fails here, naming what was declared. A plugin that
- * does not
- * implement clap.audio-ports cannot be checked and gets one port of
- * `channels` channels each way.
+ * declares -- never more -- but only the main port (index 0) is routed:
+ * main input channel k receives host channel min(k, channels-1), every
+ * non-main input reads silence (an unrouted sidechain is silent, as in a
+ * DAW), main output channel k writes host channel k or is discarded past
+ * it, and every non-main output is discarded. A main output narrower than
+ * `channels` is not refused: a mono one is duplicated onto the second host
+ * channel, and a plugin with no output ports at all produces silence. A
+ * main input narrower than `channels` *is* refused -- the host would have
+ * to invent a channel -- as is any layout past CLAP_HOST_MAX_PORTS or
+ * CLAP_HOST_MAX_PORT_CHAN, a zero-channel port, or a flagged main port
+ * that is not first. A plugin without clap.audio-ports has, per the
+ * extension's own definition, no audio ports: it is handed none.
  * Returns 0 on success, non-zero on failure (see clap_host_last_error). */
 int clap_host_open(const char *path, const char *plugin_id,
                    double sample_rate, double block_size, double channels);
@@ -183,10 +184,10 @@ double clap_host_block_size(void);
 double clap_host_channels(void);
 double clap_host_is_open(void);
 
-/* Audio channels the open plugin was wired for, summed across its declared
- * ports in each direction -- the `channels` open was given is the host side
- * of the mapping, these are the plugin side. For a plugin without
- * clap.audio-ports this is `channels` itself, which is what it was served. */
+/* Audio channels the open plugin declares, summed across its ports in each
+ * direction -- the `channels` open was given is the host side of the
+ * mapping, these are the plugin side, and only the main port of each is
+ * actually routed. 0 for a plugin without clap.audio-ports. */
 double clap_host_n_audio_in(void);
 double clap_host_n_audio_out(void);
 

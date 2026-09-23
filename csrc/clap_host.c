@@ -114,16 +114,16 @@ typedef struct {
 
     float  in[CLAP_HOST_MAX_CHAN][CLAP_HOST_MAX_BLOCK];
     float  out[CLAP_HOST_MAX_CHAN][CLAP_HOST_MAX_BLOCK];
-    float  sink[CLAP_HOST_MAX_BLOCK];   /* declared outputs past `chan` go here */
+    float  sink[CLAP_HOST_MAX_BLOCK];   /* one discard buffer serves every
+                                         * output channel past `chan` */
+    float  aux_in[CLAP_HOST_MAX_BLOCK]; /* shared silence for non-main inputs */
 
-    /* The plugin's declared audio-port layout, read at open while it is
-     * still deactivated, and the buffers process() hands it: the declared
-     * ports exactly, each data32 a slice of the flat pointer arrays that
-     * map declared channel k onto host channel min(k, chan-1) for inputs
-     * and host channel k -- or the sink, past it -- for outputs. A plugin
-     * without clap.audio-ports gets one port of `chan` channels each way. */
+    /* The plugin's declared audio-port layout and the buffers process()
+     * hands it, built at open while the plugin is still deactivated. */
     long   n_in_ports, n_out_ports;
     long   n_in_chan, n_out_chan;       /* channel counts summed over ports */
+    long   n_in_main, n_out_main;       /* channel count of port 0, 0 if none */
+    long   n_in_aux;                    /* input channels past the main port */
     clap_audio_buffer_t in_bufs[CLAP_HOST_MAX_PORTS];
     clap_audio_buffer_t out_bufs[CLAP_HOST_MAX_PORTS];
     float *in_ptr[CLAP_HOST_MAX_PORT_CHAN];
@@ -444,38 +444,19 @@ static void read_params(void) {
     }
 }
 
-/* The port scan and the buffer map in one place, called with the plugin
- * instantiated but still deactivated -- the only state in which the scan
- * is legal. A layout the host cannot serve is refused here, before
- * activate, so the failure names the plugin rather than the first block.
- *
- * The map is the LV2 host's rule applied to CLAP's multi-channel ports:
- * flattened input channel k reads host channel min(k, chan-1), and
- * flattened output channel k writes host channel k, or the sink past it.
- * What the plugin is handed is exactly what it declared -- the port count
- * and every channel_count -- which is the point: a host that sent its own
- * `channels` instead would be handing the plugin a layout it never
- * described, and a plugin that trusts the count it was given writes past
- * its own channel tables. */
+/* The port scan and the buffer map in one place, called while the plugin
+ * is still deactivated -- the only state in which the scan is legal. Only
+ * the main port (index 0) is routed: non-main inputs read aux_in, non-main
+ * outputs and main output channels past `chan` write sink. */
 static int read_audio_ports(const clap_plugin_t *p, const char *want, long ch) {
     const clap_plugin_audio_ports_t *ap =
         (const clap_plugin_audio_ports_t *)p->get_extension(p, CLAP_EXT_AUDIO_PORTS);
 
-    /* Nothing declared is nothing to check: serve the caller's layout, one
-     * port of `chan` channels each way. */
+    /* audio-ports.h: a plugin without the extension has no audio ports. */
     if (!ap) {
-        S.n_in_ports = S.n_out_ports = 1;
-        S.n_in_chan = S.n_out_chan = ch;
-        for (long c = 0; c < ch; c++) {
-            S.in_ptr[c]  = S.in[c];
-            S.out_ptr[c] = S.out[c];
-        }
-        memset(S.in_bufs, 0, sizeof S.in_bufs[0]);
-        S.in_bufs[0].data32 = S.in_ptr;
-        S.in_bufs[0].channel_count = (uint32_t)ch;
-        memset(S.out_bufs, 0, sizeof S.out_bufs[0]);
-        S.out_bufs[0].data32 = S.out_ptr;
-        S.out_bufs[0].channel_count = (uint32_t)ch;
+        S.n_in_ports = S.n_out_ports = 0;
+        S.n_in_chan = S.n_out_chan = 0;
+        S.n_in_main = S.n_out_main = S.n_in_aux = 0;
         return 0;
     }
 
@@ -499,11 +480,7 @@ static int read_audio_ports(const clap_plugin_t *p, const char *want, long ch) {
                         want, dir_name, i);
                 return 1;
             }
-            /* The spec puts a main port, when there is one, at index 0; a
-             * layout with none at all (LSP's ab_tester parallel inputs) is
-             * still served positionally. What is refused is a main flag
-             * anywhere else: port order is what the map follows, and a main
-             * that is not first would be a layout the order does not mean. */
+            /* The spec puts a main port, when there is one, at index 0. */
             if ((info.flags & CLAP_AUDIO_PORT_IS_MAIN) && i != 0) {
                 set_err("plugin '%s' declares %s port %u as main -- the spec "
                         "puts the main port at index 0", want, dir_name, i);
@@ -524,18 +501,28 @@ static int read_audio_ports(const clap_plugin_t *p, const char *want, long ch) {
             bufs[i].data32 = &ptr[flat];
             bufs[i].channel_count = info.channel_count;
             for (uint32_t c = 0; c < info.channel_count; c++, flat++)
-                ptr[flat] = is_input ? S.in[flat < ch ? flat : ch - 1]
-                                     : (flat < ch ? S.out[flat] : S.sink);
+                ptr[flat] = i == 0
+                    ? (is_input ? S.in[flat < ch ? flat : ch - 1]
+                                : (flat < ch ? S.out[flat] : S.sink))
+                    : (is_input ? S.aux_in : S.sink);
         }
-        if (is_input) { S.n_in_ports = (long)n;  S.n_in_chan  = flat; }
-        else          { S.n_out_ports = (long)n; S.n_out_chan = flat; }
+        if (is_input) {
+            S.n_in_ports = (long)n;
+            S.n_in_chan = flat;
+            S.n_in_main = n ? (long)bufs[0].channel_count : 0;
+            S.n_in_aux = flat - S.n_in_main;
+        } else {
+            S.n_out_ports = (long)n;
+            S.n_out_chan = flat;
+            S.n_out_main = n ? (long)bufs[0].channel_count : 0;
+        }
     }
 
-    /* The output block has `ch` host channels to fill; a plugin declaring
-     * fewer cannot fill it, so the request itself is refused. */
-    if (S.n_out_chan < ch) {
-        set_err("plugin '%s' declares %ld output channel(s), fewer than the "
-                "%ld channel(s) asked for", want, S.n_out_chan, ch);
+    /* A main input narrower than the host block would need a channel
+     * invented for it -- refuse rather than guess. */
+    if (S.n_in_ports && S.n_in_main < ch) {
+        set_err("plugin '%s' declares %ld main input channel(s), fewer than "
+                "the %ld channel(s) asked for", want, S.n_in_main, ch);
         return 1;
     }
     return 0;
@@ -658,6 +645,7 @@ void clap_host_close(void) {
     S.n_params = 0;
     S.n_in_ports = S.n_out_ports = 0;
     S.n_in_chan = S.n_out_chan = 0;
+    S.n_in_main = S.n_out_main = S.n_in_aux = 0;
     S.open_index = -1;
     S.in_token = S.out_token = 0;
     S.in_n = S.out_n = 0;
@@ -857,8 +845,8 @@ double clap_process(double dep,
         }
     }
 
-    /* The buffers were built at open: the plugin's declared ports exactly,
-     * each data32 mapping a declared channel onto a host channel. */
+    if (S.n_in_aux) memset(S.aux_in, 0, (size_t)S.block * sizeof(float));
+
     clap_process_t pr;
     memset(&pr, 0, sizeof pr);
     pr.steady_time        = S.steady;
@@ -880,6 +868,16 @@ double clap_process(double dep,
         set_err("plugin '%s' returned CLAP_PROCESS_ERROR", S.plugin_name);
         S.out_n = 0;
         return NAN;
+    }
+
+    /* Host channels the main output did not fill: duplicate a mono main
+     * output onto channel 1, zero anything else (a plugin with no outputs
+     * is silence rather than whatever out[][] last held). */
+    for (long c = S.n_out_main; c < S.chan; c++) {
+        if (c == 1 && S.n_out_main == 1)
+            memcpy(S.out[1], S.out[0], (size_t)S.block * sizeof(float));
+        else
+            memset(S.out[c], 0, (size_t)S.block * sizeof(float));
     }
     S.out_n = S.block;
     return (double)(++S.out_token);

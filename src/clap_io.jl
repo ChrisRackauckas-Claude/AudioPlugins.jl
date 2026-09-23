@@ -45,6 +45,7 @@ export build_clap_host!, clap_host_available, clap_lib_path, clap_src_path, clap
 # absolute path -- what a generated C program links against -- is
 # `clap_lib_path()`, and the C source it was built from is `clap_src_path()`.
 using CLAPHost_jll: CLAPHost_jll
+using Libdl: Libdl
 using Scratch: @get_scratch!
 
 const CLAP_HOST_AVAILABLE = CLAPHost_jll.is_available()
@@ -76,6 +77,15 @@ function clap_lib_path()
             "csrc/clap_host.c instead, see clap_host_available()"
     )
     return CLAPHost_jll.libclap_host_path::String
+end
+
+"Whether the loaded host library exports symbol `sym` — for tests gating on
+whether the installed `CLAPHost_jll` predates a host feature."
+_host_exports(sym::Symbol) =
+    clap_host_available() && let h = Libdl.dlopen(clap_lib_path())
+    ok = Libdl.dlsym_e(h, sym) != C_NULL
+    Libdl.dlclose(h)
+    ok
 end
 
 """
@@ -323,19 +333,19 @@ compensated, and a generated C program linking `csrc/` never sees the mode.
 [`clap_fill!`](@ref) supplies and [`clap_out`](@ref) returns — not the number
 of channels the plugin declares. At open, while still deactivated, the plugin
 is asked for its `clap.audio-ports` layout and is handed buffers matching it
-exactly: a plugin declaring two mono inputs and one mono output (a compressor
-with a mono sidechain, say) is wired `2 in / 1 out` whatever `channels` is.
-Host channel *k* feeds declared input channel *k*, with every input channel
-past `channels` fed by the last host channel — so at `channels = 1` the
-sidechain hears the same signal as the main input. Declared output channel *k*
-lands on host channel *k*, and output channels past `channels` are rendered
-into a sink. Asking for more output channels than the plugin declares — a
-mono-out plugin at `channels = 2` — fails at open with an error naming the
-layout, as do layouts with no main port or more ports or channels than the
-host holds. A plugin without `clap.audio-ports` is served one bus of
-`channels` channels each way, exactly as before. [`clap_n_audio_in`](@ref)
-and [`clap_n_audio_out`](@ref) report the declared channel totals of the
-plugin that ended up wired.
+exactly, but only the **main** port (port 0) is routed: main input channel *k*
+receives host channel `min(k, channels-1)`, and every non-main input — a
+sidechain that was never routed — reads silence, as it would in a DAW. Main
+output channel *k* lands on host channel *k* when `k < channels` and is
+discarded past it (a stereo plugin at `channels = 1` loses its right
+channel), and every non-main output is discarded. A mono main output at
+`channels = 2` is duplicated onto both host channels, and a plugin with no
+output ports produces silence. Asking for more input channels than the main
+input declares — a mono-input plugin at `channels = 2` — fails at open with
+an error naming the layout. A plugin without `clap.audio-ports` has, per the
+spec, no audio ports and produces silence. [`clap_n_audio_in`](@ref) and
+[`clap_n_audio_out`](@ref) report the declared channel totals of the plugin
+that ended up wired.
 """
 function clap_open!(
         path::AbstractString; plugin_id::AbstractString = "",
@@ -449,9 +459,8 @@ direction, summed across its `clap.audio-ports` ports. A compressor with a
 mono main input and a mono sidechain reports `2` here even when
 [`clap_open!`](@ref) was called with `channels = 1`: the host channel count
 is how many channels the driver supplies, this is how many the plugin was
-wired for. `0` when nothing is open. A plugin that does not expose
-`clap.audio-ports` is wired as one port of `channels` channels each way and
-reports `channels`.
+wired for. `0` when nothing is open — and for a plugin without
+`clap.audio-ports`, which declares no audio ports at all.
 """
 clap_n_audio_in() = Int(ccall((:clap_host_n_audio_in, CLAP_LIB), Cdouble, ()))
 

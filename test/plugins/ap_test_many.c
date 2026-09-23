@@ -100,8 +100,29 @@ static bool plug_start(const clap_plugin_t *p) { (void)p; return true; }
 static void plug_stop(const clap_plugin_t *p) { (void)p; }
 static void plug_reset(const clap_plugin_t *p) { (void)p; }
 static void plug_on_main_thread(const clap_plugin_t *p) { (void)p; }
+static uint32_t ports_count(const clap_plugin_t *p, bool is_input) {
+    (void)p; (void)is_input;
+    return 1;
+}
+static bool ports_get(const clap_plugin_t *p, uint32_t index, bool is_input,
+                      clap_audio_port_info_t *info) {
+    (void)p;
+    if (index != 0) return false;
+    memset(info, 0, sizeof *info);
+    info->id = 0;
+    snprintf(info->name, sizeof info->name, "%s", is_input ? "In" : "Out");
+    info->flags = CLAP_AUDIO_PORT_IS_MAIN;
+    info->channel_count = 2;
+    info->port_type = CLAP_PORT_STEREO;
+    info->in_place_pair = CLAP_INVALID_ID;
+    return true;
+}
+static const clap_plugin_audio_ports_t PORTS_EXT = { .count = ports_count, .get = ports_get };
+
 static const void *plug_get_extension(const clap_plugin_t *p, const char *id) {
-    (void)p; (void)id; return NULL;
+    (void)p;
+    if (strcmp(id, CLAP_EXT_AUDIO_PORTS) == 0) return &PORTS_EXT;
+    return NULL;
 }
 
 static clap_process_status plug_process(const clap_plugin_t *p,

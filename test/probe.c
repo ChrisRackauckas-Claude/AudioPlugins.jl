@@ -276,54 +276,79 @@ int main(int argc, char **argv) {
     }
 
     /* --- the declared audio layout is what process() gets -------------
-     * Two mono inputs (main + sidechain) and one output is a layout that
-     * is not one bus of `channels` channels each way. A host that never
-     * reads clap.audio-ports sends that anyway -- and this fixture refuses
-     * it outright, so these checks fail on such a host rather than running
-     * on corrupted state. */
+     * The fixtures in ap_test_sidechain.c declare layouts that are not one
+     * bus of `channels` channels each way and refuse anything else. */
     if (argc > 5) {
         const char *SC = argv[5];
-        ck(clap_host_scan(SC) == 2, "scan finds the two sidechain plugins");
+        ck(clap_host_scan(SC) == 5, "scan finds the five fixtures");
         ck(strcmp(clap_host_scan_id(0), "ap.sidechain") == 0, "  first is ap.sidechain");
-        ck(strcmp(clap_host_scan_id(1), "ap.sidechain.stereo") == 0,
-           "  then ap.sidechain.stereo");
+        ck(strcmp(clap_host_scan_id(4), "ap.source") == 0, "  ... ap.source last");
 
-        /* Mono out at one host channel: both declared inputs are fed the
-         * one input channel -- the sidechain hears the signal itself. */
+        /* ZamComp's layout at one host channel. */
         ck(clap_host_open(SC, "ap.sidechain", 48000, 64, 1) == 0, "open ap.sidechain");
-        ck(clap_host_n_audio_in() == 2, "  wired for 2 input channels (main + sidechain)");
-        ck(clap_host_n_audio_out() == 1, "  and 1 output channel");
+        ck(clap_host_n_audio_in() == 2, "  wired for 2 declared input channels");
+        ck(clap_host_n_audio_out() == 1, "  and 1 declared output channel");
         double a[64];
         for (int i = 0; i < 64; i++) a[i] = sin(0.1 * i);
         double tok = clap_process(clap_in_fill(a, 64, 1), -1, 0, -1, 0, -1, 0, -1, 0);
         ck(!isnan(tok), "  a 2-in/1-out plugin is processed, not refused");
-        int exact = 1;
+        int silent = 1;
         for (int i = 0; i < 64; i++)
-            if (fabs(clap_out_sample(tok, i, 0) - a[i] * a[i]) > 1e-6) { exact = 0; break; }
-        ck(exact, "  out == in * sidechain, the sidechain hearing the input");
+            if (!(fabs(clap_out_sample(tok, i, 0)) <= 1e-6)) { silent = 0; break; }
+        ck(silent, "  and the sidechain got silence (out == in * 0)");
+        clap_host_close();
 
-        /* Two host channels asks for two output channels the plugin does
-         * not declare: refused at open, naming what was declared. */
+        /* A stereo block into a mono main input is refused, naming the
+         * input side. */
         ck(clap_host_open(SC, "ap.sidechain", 48000, 64, 2) != 0,
-           "  asking for more outputs than declared is refused at open");
-        ck(strstr(clap_host_last_error(), "output channel") != NULL,
-           "  ... saying how many output channels it has");
+           "  a mono main input refuses channels=2");
+        ck(strstr(clap_host_last_error(), "input channel") != NULL,
+           "  ... saying how many main input channels it has");
 
-        /* Stereo out at two host channels: the sidechain is channel 1. */
+        /* ZamCompX2's layout at two channels. */
         ck(clap_host_open(SC, "ap.sidechain.stereo", 48000, 64, 2) == 0,
-           "open the stereo-out variant at channels=2");
-        ck(clap_host_n_audio_in() == 2 && clap_host_n_audio_out() == 2,
-           "  wired 2 in / 2 out");
+           "open ap.sidechain.stereo at channels=2");
+        ck(clap_host_n_audio_in() == 3 && clap_host_n_audio_out() == 2,
+           "  wired 3 in / 2 out");
         double b[128];
         for (int i = 0; i < 64; i++) { b[2 * i] = a[i]; b[2 * i + 1] = 0.5; }
         tok = clap_process(clap_in_fill(b, 64, 2), -1, 0, -1, 0, -1, 0, -1, 0);
         ck(!isnan(tok), "  processed at channels=2");
-        ck(fabs(clap_out_sample(tok, 0, 1) - 0.5) < 1e-6,
-           "  the sidechain is host channel 1 (out[1] echoes it)");
-        ck(fabs(clap_out_sample(tok, 0, 0) - a[0] * 0.5) < 1e-6,
-           "  and out[0] is in * sidechain");
+        ck(fabs(clap_out_sample(tok, 0, 0) - a[0]) < 1e-6,
+           "  main in ch 0 came through to out[0]");
+        ck(fabs(clap_out_sample(tok, 0, 1)) < 1e-6,
+           "  and the aux input got silence (out[1] echoes it)");
         clap_host_close();
-        ck(clap_host_is_open() == 0.0, "  closed");
+
+        /* Stereo in, mono out at channels=2. */
+        ck(clap_host_open(SC, "ap.mixdown", 48000, 64, 2) == 0, "open ap.mixdown");
+        ck(clap_host_n_audio_in() == 2 && clap_host_n_audio_out() == 1,
+           "  wired 2 in / 1 out");
+        tok = clap_process(clap_in_fill(b, 64, 2), -1, 0, -1, 0, -1, 0, -1, 0);
+        ck(!isnan(tok), "  processed");
+        ck(fabs(clap_out_sample(tok, 0, 0) - 0.5 * (a[0] + 0.5)) < 1e-6 &&
+           fabs(clap_out_sample(tok, 0, 1) - clap_out_sample(tok, 0, 0)) < 1e-12,
+           "  and its mono output is duplicated onto both host channels");
+        clap_host_close();
+
+        ck(clap_host_open(SC, "ap.silent", 48000, 64, 1) == 0, "open ap.silent");
+        ck(clap_host_n_audio_in() == 1 && clap_host_n_audio_out() == 0,
+           "  wired 1 in / 0 out");
+        tok = clap_process(clap_in_fill(a, 64, 1), -1, 0, -1, 0, -1, 0, -1, 0);
+        ck(!isnan(tok), "  processed");
+        silent = 1;
+        for (int i = 0; i < 64; i++)
+            if (!(clap_out_sample(tok, i, 0) == 0.0)) { silent = 0; break; }
+        ck(silent, "  and produced silence");
+        clap_host_close();
+
+        ck(clap_host_open(SC, "ap.source", 48000, 64, 1) == 0, "open ap.source");
+        ck(clap_host_n_audio_in() == 0 && clap_host_n_audio_out() == 1,
+           "  wired 0 in / 1 out");
+        tok = clap_process(clap_in_fill(a, 64, 1), -1, 0, -1, 0, -1, 0, -1, 0);
+        ck(!isnan(tok) && fabs(clap_out_sample(tok, 0, 0) - 0.25) < 1e-6,
+           "  and generated its constant");
+        clap_host_close();
     }
 
     printf("\n%s (%d failure%s)\n", fails ? "FAILURES" : "ALL PROBES PASS",
