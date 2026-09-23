@@ -29,7 +29,7 @@ jobs:
           cc -O1 -g -fPIC -shared -Wall -Wextra -fsanitize=address -o lv2/ap_test.lv2/ap_test.so test/plugins/ap_test_lv2.c
           cp test/plugins/ap_test_lv2.ttl lv2/ap_test.lv2/ap_test.ttl
           printf '@prefix lv2: <http://lv2plug.in/ns/lv2core#> .\n@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .\n' > lv2/ap_test.lv2/manifest.ttl
-          for p in gain onepole lookahead merge; do printf '<urn:audioplugins:test:%s> a lv2:Plugin ; lv2:binary <ap_test.so> ; rdfs:seeAlso <ap_test.ttl> .\n' $p >> lv2/ap_test.lv2/manifest.ttl; done
+          for p in gain onepole lookahead merge sidegain; do printf '<urn:audioplugins:test:%s> a lv2:Plugin ; lv2:binary <ap_test.so> ; rdfs:seeAlso <ap_test.ttl> .\n' $p >> lv2/ap_test.lv2/manifest.ttl; done
           # A bundle with more plugins than the descriptor cache used to hold.
           # Its Turtle is 300 copies of one block, so it is generated here
           # rather than checked in.
@@ -66,8 +66,11 @@ jobs:
           } > lv2refuse/ap_refuse.lv2/ap_refuse.ttl
           cc -std=gnu99 -O1 -g -Wall -Wextra -fsanitize=address -o probe_lv2 test/probe_lv2.c csrc/lv2_host.c -Icsrc/vendor $(pkg-config --cflags --libs lilv-0) -lm
           # test/lsan.supp: lilv keeps a handful of internal node copies past
-          # lilv_world_free; suppress those, keep leak detection on.
-          LSAN_OPTIONS=suppressions=test/lsan.supp ./probe_lv2 "$PWD/lv2" /usr/lib/lv2 "$PWD/lv2many" "$PWD/lv2midi" "$PWD/lv2refuse"
+          # lilv_world_free from lilv_world_load_plugin_classes; suppress that
+          # call path only. lilv lacks frame pointers, so ask LSan for the
+          # slow unwinder -- the fast one stops short of that frame.
+          ASAN_OPTIONS=fast_unwind_on_malloc=0 LSAN_OPTIONS=suppressions=test/lsan.supp \
+            ./probe_lv2 "$PWD/lv2" /usr/lib/lv2 "$PWD/lv2many" "$PWD/lv2midi" "$PWD/lv2refuse"
       - name: VST3 SDK (v3.8.1, MIT), libraries only
         run: |
           git clone -q --branch v3.8.1_build_84 --depth 1 --recurse-submodules --shallow-submodules https://github.com/steinbergmedia/vst3sdk sdk
