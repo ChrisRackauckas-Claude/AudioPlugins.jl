@@ -50,6 +50,12 @@ extern "C" {
 #define CLAP_HOST_MAX_BLOCK   8192
 #define CLAP_HOST_MAX_CHAN    2
 #define CLAP_HOST_MAX_PARAMS  64
+/* Bounds on the audio-port layout a plugin may declare and still be served:
+ * ports per direction, and channels summed across them. A plugin past
+ * either is refused at open, so these size static tables rather than gate
+ * anything legitimate -- a 7.1.4 port is 12 channels and even that fits. */
+#define CLAP_HOST_MAX_PORTS      16
+#define CLAP_HOST_MAX_PORT_CHAN  32
 /* Parameters clap_process() itself carries, as (id, value) argument pairs.
  * Not the number a block can drive: clap_set_param() chains, and is what a
  * plugin with more parameters than this uses. */
@@ -105,8 +111,23 @@ const char *clap_host_scan_feature(long i, long k);
  * or NULL for the first plugin. `block_size` is the exact number of frames
  * every process() call will carry -- the plugin is activated with
  * min == max == block_size, so a plugin that cannot work at a fixed block
- * size fails here, loudly, rather than at the first tick. Returns 0 on
- * success, non-zero on failure (see clap_host_last_error). */
+ * size fails here, loudly, rather than at the first tick.
+ *
+ * `channels` is the number of host audio channels, which is not the
+ * plugin's own layout. The plugin is read for clap.audio-ports while still
+ * deactivated and is handed exactly the ports and channel counts it
+ * declares -- never more: declared input channel k receives host channel
+ * min(k, channels-1) (a mono host feeds every input of a stereo plugin,
+ * and a sidechain the last channel it has), and declared output channel k
+ * writes host channel k, or the sink when k >= channels. The plugin must
+ * therefore declare at least `channels` output channels, and a layout this
+ * host cannot serve -- more ports than CLAP_HOST_MAX_PORTS, more channels
+ * than CLAP_HOST_MAX_PORT_CHAN, a main port that is not first, or too few
+ * output channels -- fails here, naming what was declared. A plugin that
+ * does not
+ * implement clap.audio-ports cannot be checked and gets one port of
+ * `channels` channels each way.
+ * Returns 0 on success, non-zero on failure (see clap_host_last_error). */
 int clap_host_open(const char *path, const char *plugin_id,
                    double sample_rate, double block_size, double channels);
 
@@ -161,6 +182,13 @@ double clap_host_sample_rate(void);
 double clap_host_block_size(void);
 double clap_host_channels(void);
 double clap_host_is_open(void);
+
+/* Audio channels the open plugin was wired for, summed across its declared
+ * ports in each direction -- the `channels` open was given is the host side
+ * of the mapping, these are the plugin side. For a plugin without
+ * clap.audio-ports this is `channels` itself, which is what it was served. */
+double clap_host_n_audio_in(void);
+double clap_host_n_audio_out(void);
 
 /* process() calls since the plugin was opened. The tests assert exactly
  * one per tick. */
