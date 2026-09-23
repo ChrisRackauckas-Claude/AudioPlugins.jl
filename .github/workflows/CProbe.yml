@@ -26,15 +26,15 @@ jobs:
       - name: LV2
         run: |
           mkdir -p lv2/ap_test.lv2
-          cc -O2 -fPIC -shared -Wall -Wextra -o lv2/ap_test.lv2/ap_test.so test/plugins/ap_test_lv2.c
+          cc -O1 -g -fPIC -shared -Wall -Wextra -fsanitize=address -o lv2/ap_test.lv2/ap_test.so test/plugins/ap_test_lv2.c
           cp test/plugins/ap_test_lv2.ttl lv2/ap_test.lv2/ap_test.ttl
           printf '@prefix lv2: <http://lv2plug.in/ns/lv2core#> .\n@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .\n' > lv2/ap_test.lv2/manifest.ttl
-          for p in gain onepole lookahead; do printf '<urn:audioplugins:test:%s> a lv2:Plugin ; lv2:binary <ap_test.so> ; rdfs:seeAlso <ap_test.ttl> .\n' $p >> lv2/ap_test.lv2/manifest.ttl; done
+          for p in gain onepole lookahead merge; do printf '<urn:audioplugins:test:%s> a lv2:Plugin ; lv2:binary <ap_test.so> ; rdfs:seeAlso <ap_test.ttl> .\n' $p >> lv2/ap_test.lv2/manifest.ttl; done
           # A bundle with more plugins than the descriptor cache used to hold.
           # Its Turtle is 300 copies of one block, so it is generated here
           # rather than checked in.
           mkdir -p lv2many/ap_many.lv2
-          cc -O2 -fPIC -shared -Wall -Wextra -o lv2many/ap_many.lv2/ap_many.so test/plugins/ap_test_many_lv2.c
+          cc -O1 -g -fPIC -shared -Wall -Wextra -fsanitize=address -o lv2many/ap_many.lv2/ap_many.so test/plugins/ap_test_many_lv2.c
           {
             printf '@prefix lv2: <http://lv2plug.in/ns/lv2core#> .\n@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .\n'
             for i in $(seq 0 299); do printf '<urn:audioplugins:test:many:%d> a lv2:Plugin ; lv2:binary <ap_many.so> ; rdfs:seeAlso <ap_many.ttl> .\n' $i; done
@@ -45,11 +45,29 @@ jobs:
           } > lv2many/ap_many.lv2/ap_many.ttl
           # A bundle whose plugin requires atom ports (MIDI in, echo out).
           mkdir -p lv2midi/ap_midi.lv2
-          cc -O2 -fPIC -shared -Wall -Wextra -Icsrc/vendor -o lv2midi/ap_midi.lv2/ap_midi.so test/plugins/ap_test_midi_lv2.c
+          cc -O1 -g -fPIC -shared -Wall -Wextra -fsanitize=address -Icsrc/vendor -o lv2midi/ap_midi.lv2/ap_midi.so test/plugins/ap_test_midi_lv2.c
           cp test/plugins/ap_test_midi_lv2.ttl lv2midi/ap_midi.lv2/ap_midi.ttl
           printf '@prefix lv2: <http://lv2plug.in/ns/lv2core#> .\n@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .\n<urn:audioplugins:test:notegain> a lv2:Plugin ; lv2:binary <ap_midi.so> ; rdfs:seeAlso <ap_midi.ttl> .\n' > lv2midi/ap_midi.lv2/manifest.ttl
-          cc -std=gnu99 -O2 -Wall -Wextra -o probe_lv2 test/probe_lv2.c csrc/lv2_host.c -Icsrc/vendor $(pkg-config --cflags --libs lilv-0) -lm
-          ./probe_lv2 "$PWD/lv2" /usr/lib/lv2 "$PWD/lv2many" "$PWD/lv2midi"
+          # Two plugins open() must refuse: one with more atom ports than the
+          # host's limit, one whose required atom port is not a Sequence. No
+          # binaries: the port census runs before instantiation.
+          mkdir -p lv2refuse/ap_refuse.lv2
+          {
+            printf '@prefix lv2: <http://lv2plug.in/ns/lv2core#> .\n@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .\n'
+            printf '<urn:audioplugins:test:manyatom> a lv2:Plugin ; rdfs:seeAlso <ap_refuse.ttl> .\n'
+            printf '<urn:audioplugins:test:chunkatom> a lv2:Plugin ; rdfs:seeAlso <ap_refuse.ttl> .\n'
+          } > lv2refuse/ap_refuse.lv2/manifest.ttl
+          {
+            printf '@prefix lv2: <http://lv2plug.in/ns/lv2core#> .\n@prefix atom: <http://lv2plug.in/ns/ext/atom#> .\n@prefix doap: <http://usefulinc.com/ns/doap#> .\n'
+            printf '<urn:audioplugins:test:manyatom> a lv2:Plugin ; doap:name "AudioPlugins Test Many Atom" ; lv2:port'
+            for i in $(seq 0 32); do printf ' [ a lv2:InputPort, atom:AtomPort ; lv2:index %d ; lv2:symbol "a%d" ; lv2:name "a%d" ] ,' $i $i $i; done
+            printf ' [ a lv2:OutputPort, lv2:AudioPort ; lv2:index 33 ; lv2:symbol "out" ; lv2:name "Out" ] .\n'
+            printf '<urn:audioplugins:test:chunkatom> a lv2:Plugin ; doap:name "AudioPlugins Test Chunk Atom" ; lv2:port [ a lv2:InputPort, atom:AtomPort ; lv2:index 0 ; lv2:symbol "chunk" ; lv2:name "chunk" ; atom:bufferType atom:Chunk ] , [ a lv2:OutputPort, lv2:AudioPort ; lv2:index 1 ; lv2:symbol "out" ; lv2:name "Out" ] .\n'
+          } > lv2refuse/ap_refuse.lv2/ap_refuse.ttl
+          cc -std=gnu99 -O1 -g -Wall -Wextra -fsanitize=address -o probe_lv2 test/probe_lv2.c csrc/lv2_host.c -Icsrc/vendor $(pkg-config --cflags --libs lilv-0) -lm
+          # test/lsan.supp: lilv keeps a handful of internal node copies past
+          # lilv_world_free; suppress those, keep leak detection on.
+          LSAN_OPTIONS=suppressions=test/lsan.supp ./probe_lv2 "$PWD/lv2" /usr/lib/lv2 "$PWD/lv2many" "$PWD/lv2midi" "$PWD/lv2refuse"
       - name: VST3 SDK (v3.8.1, MIT), libraries only
         run: |
           git clone -q --branch v3.8.1_build_84 --depth 1 --recurse-submodules --shallow-submodules https://github.com/steinbergmedia/vst3sdk sdk

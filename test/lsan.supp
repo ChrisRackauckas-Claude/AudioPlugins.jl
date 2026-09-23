@@ -1,0 +1,4 @@
+# LeakSanitizer suppressions for probe_lv2 (CProbe.yml).
+# lilv copies nodes into its world model during manifest evaluation; a
+# handful of these internal copies are still allocated at lilv_world_free.
+leak:lilv_node_new_from_node
