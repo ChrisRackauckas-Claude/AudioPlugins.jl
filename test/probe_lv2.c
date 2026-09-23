@@ -5,6 +5,7 @@
  *       -Icsrc/vendor $(pkg-config --cflags --libs lilv-0) -lm
  *   /tmp/probe_lv2 <dir containing ap_test.lv2> [<a real LV2 dir, e.g. /usr/lib/lv2>]
  *                                               [<dir containing ap_many.lv2>]
+ *                                               [<dir containing ap_midi.lv2>]
  */
 #include "../csrc/lv2_host.h"
 #include <math.h>
@@ -45,10 +46,17 @@ int main(int argc, char **argv) {
     ck(strstr(lv2_host_last_error(), "urn:no:such") != NULL, "  ... naming the URI");
     ck(lv2_host_open(DIR, GAIN, 48000, 99999, 1) != 0, "oversized block fails");
     ck(lv2_host_open(DIR, GAIN, 48000, 64, 7) != 0, "too many channels fails");
-    ck(lv2_host_open(DIR, GAIN, 48000, 64, 2) != 0, "2 channels into a mono plugin fails");
-    ck(strstr(lv2_host_last_error(), "audio output") != NULL, "  ... naming the port count");
     ck(lv2_host_open(DIR, GAIN, -1, 64, 1) != 0, "non-positive sample rate fails");
     ck(lv2_host_is_open() == 0.0, "state after a failed open is closed");
+
+    ck(lv2_host_open(DIR, GAIN, 48000, 64, 2) == 0, "2 channels into a mono plugin opens");
+    if (lv2_host_is_open() == 1.0) {
+        double t = lv2_in_fill((double[64]){[0 ... 63] = 1.0}, 64, 1);
+        double o = lv2_process(t, 0, 2.0, -1, 0, -1, 0, -1, 0);
+        ck(lv2_out_sample(o, 0, 0) == 2.0 && lv2_out_sample(o, 63, 1) == 2.0,
+           "  ... and the one output repeats on both channels");
+    }
+    lv2_host_close();
 
     ck(lv2_host_open(DIR, GAIN, 48000, 64, 1) == 0, "open gain");
     if (!lv2_host_is_open()) printf("   error: %s\n", lv2_host_last_error());
@@ -161,6 +169,72 @@ int main(int argc, char **argv) {
 
         ck(lv2_host_scan(DIR) == 3, "  rescanning the small bundle finds 3 again");
         ck(strcmp(lv2_host_scan_uri(3), "") == 0, "  with nothing left over from the big one");
+        lv2_host_close();
+    }
+
+    if (argc > 4) {   /* the MIDI bundle: required atom ports */
+        const char *MDIR = argv[4];
+        const char *NG = "urn:audioplugins:test:notegain";
+
+        ck(lv2_host_open(MDIR, NG, 48000, 64, 1) == 0,
+           "open notegain (required atom ports)");
+        if (!lv2_host_is_open()) printf("   error: %s\n", lv2_host_last_error());
+        ck(lv2_host_n_atom_ports() == 3.0, "three atom ports discovered");
+        ck(lv2_host_atom_port_index(0) == 0.0 && lv2_host_atom_port_is_input(0) == 1.0,
+           "  slot 0 is atom input port 0 (midi_in)");
+        ck(lv2_host_atom_port_index(1) == 1.0 && lv2_host_atom_port_is_input(1) == 0.0,
+           "  slot 1 is atom output port 1 (midi_out)");
+        ck(lv2_host_atom_port_index(2) == 5.0 && lv2_host_atom_port_is_input(2) == 1.0,
+           "  slot 2 is atom input port 5 (patch_in)");
+        ck(lv2_host_atom_port_midi(0) == 1.0 && lv2_host_atom_port_midi(1) == 1.0
+           && lv2_host_atom_port_midi(2) == 0.0,
+           "  MidiEvent declared for the MIDI ports, not patch_in");
+        ck(lv2_host_atom_port_size(0) == 16384.0, "  rsz:minimumSize honoured");
+        ck(lv2_host_atom_port_size(1) == LV2_HOST_ATOM_BUF, "  undeclared gets the floor");
+        ck(lv2_host_n_params() == 0, "a control output is not a parameter");
+
+        ck(isnan(lv2_in_midi(0, 0, 0x90, 60, 100)), "midi event before a block is refused");
+
+        /* Gate timing: note-on at frame 16 opens the gate; a control change
+         * at frame 32 rides along and is echoed but changes nothing. */
+        double t = lv2_in_fill(step, 64, 1);
+        ck(lv2_in_midi(0, 16, 0x90, 60, 127) == 1.0, "note-on queued");
+        ck(lv2_in_midi(0, 32, 0xB0, 1, 2) == 2.0, "a second event queues");
+        ck(isnan(lv2_in_midi(0, 8, 0x90, 60, 100)), "an out-of-order event is refused");
+        ck(isnan(lv2_in_midi(0, 64, 0x90, 60, 100)), "frame == block size is refused");
+        ck(isnan(lv2_in_midi(2, 0, 0x90, 60, 100)), "an audio port refuses MIDI");
+        ck(isnan(lv2_in_midi(1, 0, 0x90, 60, 100)), "an atom output refuses MIDI");
+        ck(isnan(lv2_in_midi(5, 0, 0x90, 60, 100)), "a non-MIDI atom input refuses MIDI");
+        double o = lv2_process(t, -1, 0, -1, 0, -1, 0, -1, 0);
+        int gate = 1;
+        for (long i = 0; i < 64; i++) {
+            double want = (i >= 16) ? 1.0 : 0.0;
+            if (fabs(lv2_out_sample(o, (double)i, 0) - want) > 1e-7) { gate = 0; break; }
+        }
+        ck(gate, "note-on at 16 opens the gate sample-exactly");
+        ck(lv2_host_port_value(4) == 2.0, "2 events echoed to midi_out");
+        ck(isnan(lv2_host_param_value(4)), "  n_echo is not a parameter");
+        ck(isnan(lv2_host_port_value(2)), "  an audio port has no port value");
+
+        /* A block with no events: the gate stays open at velocity 127/127. */
+        double t2 = lv2_in_fill(step, 64, 1);
+        double o2 = lv2_process(t2, -1, 0, -1, 0, -1, 0, -1, 0);
+        ck(lv2_out_sample(o2, 0, 0) == 1.0 && lv2_out_sample(o2, 63, 0) == 1.0,
+           "gate held across a silent block");
+        ck(lv2_host_port_value(4) == 0.0, "  and nothing was echoed");
+
+        /* note-off at 0 closes it for the whole block ... */
+        double t3 = lv2_in_fill(step, 64, 1);
+        lv2_in_midi(0, 0, 0x80, 60, 0);
+        double o3 = lv2_process(t3, -1, 0, -1, 0, -1, 0, -1, 0);
+        ck(lv2_out_peak(o3) == 0.0, "note-off at 0 silences the block");
+
+        /* ... and a note-on at velocity 64 reopens it at gain 64/127. */
+        double t4 = lv2_in_fill(step, 64, 1);
+        lv2_in_midi(0, 0, 0x90, 60, 64);
+        double o4 = lv2_process(t4, -1, 0, -1, 0, -1, 0, -1, 0);
+        ck(fabs(lv2_out_sample(o4, 0, 0) - 64.0 / 127.0) < 1e-6,
+           "note-on velocity 64 gives gain 64/127");
         lv2_host_close();
     }
 
