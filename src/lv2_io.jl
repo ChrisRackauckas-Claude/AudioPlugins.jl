@@ -184,9 +184,9 @@ function lv2_scan(lv2_path::AbstractString)
     n < 0 && error("lv2_scan($(repr(lv2_path))) failed: $(lv2_last_error())")
     return [
         (
-                uri = unsafe_string(ccall((:lv2_host_scan_uri, LV2_LIB), Cstring, (Clong,), i)),
-                name = unsafe_string(ccall((:lv2_host_scan_name, LV2_LIB), Cstring, (Clong,), i)),
-            )
+            uri = unsafe_string(ccall((:lv2_host_scan_uri, LV2_LIB), Cstring, (Clong,), i)),
+            name = unsafe_string(ccall((:lv2_host_scan_name, LV2_LIB), Cstring, (Clong,), i)),
+        )
             for i in 0:(n - 1)
     ]
 end
@@ -335,13 +335,13 @@ function lv2_params()
     n = lv2_param_count()
     return [
         (
-                id = ccall((:lv2_host_param_id, LV2_LIB), Cdouble, (Clong,), i),
-                name = unsafe_string(ccall((:lv2_host_param_name, LV2_LIB), Cstring, (Clong,), i)),
-                symbol = unsafe_string(ccall((:lv2_host_param_symbol, LV2_LIB), Cstring, (Clong,), i)),
-                min = ccall((:lv2_host_param_min, LV2_LIB), Cdouble, (Clong,), i),
-                max = ccall((:lv2_host_param_max, LV2_LIB), Cdouble, (Clong,), i),
-                default = ccall((:lv2_host_param_default, LV2_LIB), Cdouble, (Clong,), i),
-            )
+            id = ccall((:lv2_host_param_id, LV2_LIB), Cdouble, (Clong,), i),
+            name = unsafe_string(ccall((:lv2_host_param_name, LV2_LIB), Cstring, (Clong,), i)),
+            symbol = unsafe_string(ccall((:lv2_host_param_symbol, LV2_LIB), Cstring, (Clong,), i)),
+            min = ccall((:lv2_host_param_min, LV2_LIB), Cdouble, (Clong,), i),
+            max = ccall((:lv2_host_param_max, LV2_LIB), Cdouble, (Clong,), i),
+            default = ccall((:lv2_host_param_default, LV2_LIB), Cdouble, (Clong,), i),
+        )
             for i in 0:(n - 1)
     ]
 end
@@ -374,11 +374,11 @@ function lv2_atom_ports()
     n = Int(ccall((:lv2_host_n_atom_ports, LV2_LIB), Cdouble, ()))
     return [
         (
-                index = Int(ccall((:lv2_host_atom_port_index, LV2_LIB), Cdouble, (Cdouble,), i)),
-                input = ccall((:lv2_host_atom_port_is_input, LV2_LIB), Cdouble, (Cdouble,), i) == 1.0,
-                midi = ccall((:lv2_host_atom_port_midi, LV2_LIB), Cdouble, (Cdouble,), i) == 1.0,
-                size = Int(ccall((:lv2_host_atom_port_size, LV2_LIB), Cdouble, (Cdouble,), i)),
-            )
+            index = Int(ccall((:lv2_host_atom_port_index, LV2_LIB), Cdouble, (Cdouble,), i)),
+            input = ccall((:lv2_host_atom_port_is_input, LV2_LIB), Cdouble, (Cdouble,), i) == 1.0,
+            midi = ccall((:lv2_host_atom_port_midi, LV2_LIB), Cdouble, (Cdouble,), i) == 1.0,
+            size = Int(ccall((:lv2_host_atom_port_size, LV2_LIB), Cdouble, (Cdouble,), i)),
+        )
             for i in 0:(n - 1)
     ]
 end
@@ -435,9 +435,9 @@ function lv2_out(token::Real; channel::Integer = 0)
     isnan(n) && return Float64[]
     return [
         ccall(
-                (:lv2_out_sample, LV2_LIB), Cdouble, (Cdouble, Cdouble, Cdouble),
-                token, i, channel
-            ) for i in 0:(Int(n) - 1)
+            (:lv2_out_sample, LV2_LIB), Cdouble, (Cdouble, Cdouble, Cdouble),
+            token, i, channel
+        ) for i in 0:(Int(n) - 1)
     ]
 end
 
