@@ -399,11 +399,18 @@ anything else (an atom buffer type other than Sequence, a CV or event port, or a
 host feature such as `worker:schedule`) is refused at [`lv2_open!`](@ref) with a
 message naming what it asked for. An unconnected required port is undefined behaviour
 in the LV2 specification, so refusing is the honest answer; a plugin whose extras are
-optional opens fine. A plugin with fewer audio outputs than the requested channels has
-its last output repeated on the remaining channels, and one with no audio ports is
-silent — the shape of a MIDI tool.
+optional opens fine.
 
-[`lv2_test_bundle`](@ref) compiles the same three test plugins as an LV2 bundle, so the
+Channel counts are never silently dropped: the k-th audio input port receives host
+channel `min(k, channels-1)`, so a mono host feeds every input of a stereo plugin,
+while a plugin with fewer audio inputs than the requested `channels` is refused
+rather than leave a host channel connected to nothing. On the output side the k-th
+port writes host channel `k` and extra ports are discarded; a plugin with fewer
+audio outputs than the requested channels has its last output repeated on the
+remaining channels, and one with no audio ports is silent — the shape of a MIDI
+tool.
+
+[`lv2_test_bundle`](@ref) compiles the same test plugins as an LV2 bundle, so the
 LV2 path is proved against arithmetic that can be checked rather than against a
 third-party binary.
 
