@@ -102,15 +102,6 @@ plugins(Airwindows_jll)             # all 504 of them
 clap_open!("org.airwindows.Galactic"; sample_rate = 48000, block_size = 256, channels = 2)
 ```
 
-!!! note "A collection larger than 32 plugins needs `CLAPHost_jll` 1.1 or newer"
-    `CLAPHost_jll` before 1.1 caps a scan at 32 plugins and reports the truncated
-    count without an error, so a large collection appears to be mostly missing.
-    AudioPlugins releases up to and including 1.4.0 declare `CLAPHost_jll = "1"`,
-    which admits those older hosts; a normal resolve picks the newest and is fine,
-    but a constrained one need not. If `plugins()` returns exactly 32 entries for a
-    collection you expect to be larger, check the resolved `CLAPHost_jll` version
-    first.
-
 ## A collection you can run today
 
 The package's own test bundle is a three-plugin CLAP module, and the registry does not
