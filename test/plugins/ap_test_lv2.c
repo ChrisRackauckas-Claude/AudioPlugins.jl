@@ -7,6 +7,7 @@
  *   urn:audioplugins:test:gain       ports: 0 gain (ctrl in), 1 in, 2 out
  *   urn:audioplugins:test:onepole    ports: 0 a    (ctrl in), 1 in, 2 out
  *   urn:audioplugins:test:lookahead  ports: 0 in, 1 out, 2 latency (ctrl out)
+ *   urn:audioplugins:test:merge      ports: 0 in0, 1 in1, 2 out
  */
 #include "../../csrc/vendor/lv2/core/lv2.h"
 #include <stdlib.h>
@@ -15,7 +16,7 @@
 #define LOOKAHEAD 16
 
 typedef struct {
-    const float *ctrl, *in;
+    const float *ctrl, *in, *in1;
     float *out;
     float *latency;
     float  state;                /* one-pole memory */
@@ -92,6 +93,23 @@ static void run_lookahead(LV2_Handle h, uint32_t n) {
     if (s->latency) *s->latency = (float)LOOKAHEAD;
 }
 
+/* --- merge: 0 in0, 1 in1, 2 out; two declared inputs so a stereo host
+ * block feeds both ports (a mono input under a stereo host is refused) --- */
+static void connect_merge(LV2_Handle h, uint32_t port, void *data) {
+    inst_t *s = (inst_t *)h;
+    switch (port) {
+    case 0: s->in  = (const float *)data; break;
+    case 1: s->in1 = (const float *)data; break;
+    case 2: s->out = (float *)data; break;
+    default: break;
+    }
+}
+static void run_merge(LV2_Handle h, uint32_t n) {
+    inst_t *s = (inst_t *)h;
+    if (!s->in || !s->in1 || !s->out) return;
+    for (uint32_t i = 0; i < n; i++) s->out[i] = s->in[i] + s->in1[i];
+}
+
 static const LV2_Descriptor DESCS[] = {
     { "urn:audioplugins:test:gain",      instantiate, connect_ctrl_in_out, activate_reset,
       run_gain,      deactivate, cleanup, extension_data },
@@ -99,8 +117,10 @@ static const LV2_Descriptor DESCS[] = {
       run_onepole,   deactivate, cleanup, extension_data },
     { "urn:audioplugins:test:lookahead", instantiate, connect_lookahead,   activate_reset,
       run_lookahead, deactivate, cleanup, extension_data },
+    { "urn:audioplugins:test:merge",     instantiate, connect_merge,       activate_reset,
+      run_merge,     deactivate, cleanup, extension_data },
 };
 
 LV2_SYMBOL_EXPORT const LV2_Descriptor *lv2_descriptor(uint32_t index) {
-    return (index < 3) ? &DESCS[index] : NULL;
+    return (index < 4) ? &DESCS[index] : NULL;
 }

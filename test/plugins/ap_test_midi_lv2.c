@@ -3,12 +3,16 @@
  * rule as ap_test_lv2.c: every expectation in the probes is arithmetic.
  *
  *   urn:audioplugins:test:notegain
- *   ports: 0 midi_in  (atom in, required, supports MidiEvent,
- *                      rsz:minimumSize 512)
- *          1 midi_out (atom out, required: the input echoed back)
- *          2 in, 3 out (audio)
- *          4 n_echo   (ctrl out: events echoed this block)
- *          5 patch_in (atom in, connectionOptional, supports patch:Message)
+ *   ports: 0 patch_in (atom in, connectionOptional, supports patch:Message)
+ *          1 midi_in  (atom in, required, supports MidiEvent,
+ *                      rsz:minimumSize 16384)
+ *          2 midi_out (atom out, required: the input echoed back)
+ *          3 in, 4 out (audio)
+ *          5 n_echo   (ctrl out: events echoed this block)
+ *
+ * midi_out is the last atom port deliberately: its buffer is the last
+ * slot in the host's atom arena, so an echo that overruns it writes past
+ * the arena's end, where AddressSanitizer sees it.
  *
  * A note-on opens the gate at the event's exact frame and sets the gain to
  * velocity/127; a note-off or a zero-velocity note-on closes it. So
@@ -60,11 +64,11 @@ static const void *extension_data(const char *uri) { (void)uri; return NULL; }
 static void connect_notegain(LV2_Handle h, uint32_t port, void *data) {
     inst_t *s = (inst_t *)h;
     switch (port) {
-    case 0: s->midi_in  = (const LV2_Atom_Sequence *)data; break;
-    case 1: s->midi_out = (LV2_Atom_Sequence *)data; break;
-    case 2: s->in       = (const float *)data; break;
-    case 3: s->out      = (float *)data; break;
-    case 4: s->n_echo   = (float *)data; break;
+    case 1: s->midi_in  = (const LV2_Atom_Sequence *)data; break;
+    case 2: s->midi_out = (LV2_Atom_Sequence *)data; break;
+    case 3: s->in       = (const float *)data; break;
+    case 4: s->out      = (float *)data; break;
+    case 5: s->n_echo   = (float *)data; break;
     default: break;
     }
 }
@@ -78,15 +82,16 @@ static void run_notegain(LV2_Handle h, uint32_t n) {
     uint32_t i = 0;
     int echoed = 0;
 
-    /* The host presents the output buffer's capacity in atom.size. Take
-     * it, then re-head the buffer to an empty sequence. */
+    /* The standard output idiom: the host presents an atom:Chunk whose
+     * atom.size is the capacity after the header; the plugin then writes
+     * a sequence bounded by exactly that value. A host that reported the
+     * whole buffer as capacity is caught here, by ASan or the count. */
     uint32_t cap = 0;
     if (s->midi_out) {
         cap = s->midi_out->atom.size;
-        s->midi_out->atom.size = (uint32_t)sizeof(LV2_Atom_Sequence_Body);
+        lv2_atom_sequence_clear(s->midi_out);
         s->midi_out->atom.type = s->u_sequence;
         s->midi_out->body.unit = s->u_frametime;
-        s->midi_out->body.pad  = 0;
     }
 
     if (s->midi_in && s->midi_in->atom.type == s->u_sequence) {
@@ -106,17 +111,9 @@ static void run_notegain(LV2_Handle h, uint32_t n) {
                 default: break;
                 }
             }
-            if (s->midi_out) {
-                LV2_Atom_Event *dst = lv2_atom_sequence_end(
-                    &s->midi_out->body, s->midi_out->atom.size);
-                uint32_t total = (uint32_t)sizeof(*dst) + ev->body.size;
-                if ((uint8_t *)dst + lv2_atom_pad_size(total) <=
-                    (uint8_t *)s->midi_out + cap) {
-                    memcpy(dst, ev, total);
-                    s->midi_out->atom.size += lv2_atom_pad_size(total);
-                    echoed++;
-                }
-            }
+            if (s->midi_out &&
+                lv2_atom_sequence_append_event(s->midi_out, cap, ev))
+                echoed++;
         }
     }
     for (; i < n; i++) s->out[i] = s->in ? s->in[i] * s->gain : 0.0f;
