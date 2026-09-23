@@ -37,6 +37,17 @@ clap_sample_rate()   # 48000.0
 The plugin is activated with `min == max == block_size`, so a plugin that cannot work at
 a fixed block fails here, loudly, rather than at the first block of audio.
 
+`channels` is the number of **host** channels the block carries, not the plugin's own
+layout. The plugin's declared `clap.audio-ports` layout is handed over exactly, but only
+its **main** port is routed: main input channel *k* receives host channel
+`min(k, channels-1)`, every non-main input (an unrouted sidechain) reads silence, main
+output channel *k* lands on host channel *k* when `k < channels` and is discarded past it
+(a stereo plugin at `channels = 1` loses its right channel), and every non-main output is
+discarded. A mono main output at `channels = 2` is duplicated onto both host channels, and
+a plugin with no output ports produces silence. A main input narrower than `channels` —
+a mono-input plugin at `channels = 2` — fails at open with an error naming the layout,
+and a plugin without `clap.audio-ports` declares no audio ports at all.
+
 Parameters are discovered by number, not by name:
 
 ```julia

@@ -33,6 +33,7 @@ export build_clap_host!, clap_host_available, clap_lib_path, clap_src_path, clap
     clap_is_open, clap_last_error, clap_plugin_name,
     clap_params, clap_param_count, clap_latency, clap_compensating, clap_flush!,
     clap_block_size, clap_sample_rate, clap_n_process, clap_reset_counters!,
+    clap_n_audio_in, clap_n_audio_out,
     clap_plugin_index,
     clap_fill!, clap_out, clap_test_bundle,
     CLAP_WAVE_SILENCE, CLAP_WAVE_SINE, CLAP_WAVE_SQUARE,
@@ -44,6 +45,7 @@ export build_clap_host!, clap_host_available, clap_lib_path, clap_src_path, clap
 # absolute path -- what a generated C program links against -- is
 # `clap_lib_path()`, and the C source it was built from is `clap_src_path()`.
 using CLAPHost_jll: CLAPHost_jll
+using Libdl: Libdl
 using Scratch: @get_scratch!
 
 const CLAP_HOST_AVAILABLE = CLAPHost_jll.is_available()
@@ -75,6 +77,15 @@ function clap_lib_path()
             "csrc/clap_host.c instead, see clap_host_available()"
     )
     return CLAPHost_jll.libclap_host_path::String
+end
+
+"Whether the loaded host library exports symbol `sym` — for tests gating on
+whether the installed `CLAPHost_jll` predates a host feature."
+_host_exports(sym::Symbol) =
+    clap_host_available() && let h = Libdl.dlopen(clap_lib_path())
+    ok = Libdl.dlsym_e(h, sym) != C_NULL
+    Libdl.dlclose(h)
+    ok
 end
 
 """
@@ -317,6 +328,24 @@ this behaves exactly as it always did.
 [`clap_out`](@ref) and [`clap_flush!`](@ref). It is off by default: the
 documented behaviour is that [`clap_latency`](@ref) is surfaced, not
 compensated, and a generated C program linking `csrc/` never sees the mode.
+
+`channels` is the number of **host** channels — the width of the block
+[`clap_fill!`](@ref) supplies and [`clap_out`](@ref) returns — not the number
+of channels the plugin declares. At open, while still deactivated, the plugin
+is asked for its `clap.audio-ports` layout and is handed buffers matching it
+exactly, but only the **main** port (port 0) is routed: main input channel *k*
+receives host channel `min(k, channels-1)`, and every non-main input — a
+sidechain that was never routed — reads silence, as it would in a DAW. Main
+output channel *k* lands on host channel *k* when `k < channels` and is
+discarded past it (a stereo plugin at `channels = 1` loses its right
+channel), and every non-main output is discarded. A mono main output at
+`channels = 2` is duplicated onto both host channels, and a plugin with no
+output ports produces silence. Asking for more input channels than the main
+input declares — a mono-input plugin at `channels = 2` — fails at open with
+an error naming the layout. A plugin without `clap.audio-ports` has, per the
+spec, no audio ports and produces silence. [`clap_n_audio_in`](@ref) and
+[`clap_n_audio_out`](@ref) report the declared channel totals of the plugin
+that ended up wired.
 """
 function clap_open!(
         path::AbstractString; plugin_id::AbstractString = "",
@@ -421,6 +450,29 @@ clap_n_process() = ccall((:clap_host_n_process, CLAP_LIB), Clong, ())
 Number of parameters the open plugin exposes, i.e. `length(clap_params())`.
 """
 clap_param_count() = ccall((:clap_host_n_params, CLAP_LIB), Clong, ())
+
+"""
+    clap_n_audio_in() -> Int
+
+Total number of audio channels the open plugin declared in its input
+direction, summed across its `clap.audio-ports` ports. A compressor with a
+mono main input and a mono sidechain reports `2` here even when
+[`clap_open!`](@ref) was called with `channels = 1`: the host channel count
+is how many channels the driver supplies, this is how many the plugin was
+wired for. `0` when nothing is open — and for a plugin without
+`clap.audio-ports`, which declares no audio ports at all.
+"""
+clap_n_audio_in() = Int(ccall((:clap_host_n_audio_in, CLAP_LIB), Cdouble, ()))
+
+"""
+    clap_n_audio_out() -> Int
+
+Total number of audio channels the open plugin declared in its output
+direction, summed across its `clap.audio-ports` ports. See
+[`clap_n_audio_in`](@ref): this is the same number on the output side.
+`0` when nothing is open.
+"""
+clap_n_audio_out() = Int(ccall((:clap_host_n_audio_out, CLAP_LIB), Cdouble, ()))
 
 """
     clap_latency() -> Float64

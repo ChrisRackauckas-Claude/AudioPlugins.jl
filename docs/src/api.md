@@ -76,6 +76,8 @@ AudioPlugins.clap_param_value
 ```@docs
 clap_fill!
 clap_out
+clap_n_audio_in
+clap_n_audio_out
 ```
 
 ## Node-side operators
