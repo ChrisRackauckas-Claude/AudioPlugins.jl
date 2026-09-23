@@ -19,17 +19,6 @@ const MERGE = "urn:audioplugins:test:merge"
 const SIDEG = "urn:audioplugins:test:sidegain"
 const NG = "urn:audioplugins:test:notegain"
 
-# LV2Host_jll ships a prebuilt build of `csrc/lv2_host.c`, so this PR's atom
-# ports, channel policy and token consumption reach Julia only once the JLL
-# is rebuilt. Gate on the host exporting `lv2_in_midi`, as `HOST_HAS_CHAIN`
-# does for `clap_set_param`: the C-level coverage that runs on every PR is
-# `test/probe_lv2.c`, which compiles the source in this repository.
-const LV2_HAS_ATOM = let h = Libdl.dlopen(lv2_lib_path())
-    ok = Libdl.dlsym_e(h, :lv2_in_midi) != C_NULL
-    Libdl.dlclose(h)
-    ok
-end
-
 @testset "AudioPlugins / LV2" begin
 
     @testset "the host comes prebuilt, the test plugins do not" begin
@@ -66,43 +55,37 @@ end
         @test !lv2_is_open()
     end
 
-    if !LV2_HAS_ATOM
-        @info "LV2Host_jll $(lv2_lib_path()) predates lv2_in_midi: the channel " *
-            "policy, atom-port, MIDI and refusal tests are covered by " *
-            "test/probe_lv2.c until the JLL is rebuilt"
-    else
-        @testset "channel arrangement never drops a channel" begin
-            # A stereo host into a mono-input plugin would leave host channel 1
-            # feeding nothing: refused, not silently dropped.
-            @test_throws ErrorException lv2_open!(
-                LV2_PATH; uri = GAIN, block_size = 64, channels = 2
-            )
-            @test occursin("audio input", lv2_last_error())
-            # Merge declares two inputs: stereo feeds both, and its one output
-            # is repeated on both host channels.
-            lv2_open!(LV2_PATH; uri = MERGE, block_size = 64, channels = 2)
-            @test lv2_is_open() && lv2_channels() == 2
-            x = Vector{Float64}(undef, 128)
-            for i in 0:63
-                x[2i + 1] = 1.0   # channel 0
-                x[2i + 2] = 2.0   # channel 1
-            end
-            o = AP.lv2_process(lv2_fill!(x; channels = 2), -1, 0, -1, 0, -1, 0, -1, 0)
-            @test lv2_out(o; channel = 0) ≈ fill(3.0, 64)
-            @test lv2_out(o; channel = 1) ≈ fill(3.0, 64)
-            lv2_close!()
-
-            # sidegain: out = in + side; the host feeds the sidechain
-            # silence, and a stereo host refuses (one main input).
-            lv2_open!(LV2_PATH; uri = SIDEG, block_size = 64, channels = 1)
-            @test AP.lv2_n_audio_in() == 1 && AP.lv2_n_audio_out() == 1
-            o = AP.lv2_process(lv2_fill!(ones(64)), -1, 0, -1, 0, -1, 0, -1, 0)
-            @test lv2_out(o) ≈ ones(64)
-            lv2_close!()
-            @test_throws ErrorException lv2_open!(
-                LV2_PATH; uri = SIDEG, block_size = 64, channels = 2
-            )
+    @testset "channel arrangement never drops a channel" begin
+        # A stereo host into a mono-input plugin would leave host channel 1
+        # feeding nothing: refused, not silently dropped.
+        @test_throws ErrorException lv2_open!(
+            LV2_PATH; uri = GAIN, block_size = 64, channels = 2
+        )
+        @test occursin("audio input", lv2_last_error())
+        # Merge declares two inputs: stereo feeds both, and its one output
+        # is repeated on both host channels.
+        lv2_open!(LV2_PATH; uri = MERGE, block_size = 64, channels = 2)
+        @test lv2_is_open() && lv2_channels() == 2
+        x = Vector{Float64}(undef, 128)
+        for i in 0:63
+            x[2i + 1] = 1.0   # channel 0
+            x[2i + 2] = 2.0   # channel 1
         end
+        o = AP.lv2_process(lv2_fill!(x; channels = 2), -1, 0, -1, 0, -1, 0, -1, 0)
+        @test lv2_out(o; channel = 0) ≈ fill(3.0, 64)
+        @test lv2_out(o; channel = 1) ≈ fill(3.0, 64)
+        lv2_close!()
+
+        # sidegain: out = in + side; the host feeds the sidechain
+        # silence, and a stereo host refuses (one main input).
+        lv2_open!(LV2_PATH; uri = SIDEG, block_size = 64, channels = 1)
+        @test AP.lv2_n_audio_in() == 1 && AP.lv2_n_audio_out() == 1
+        o = AP.lv2_process(lv2_fill!(ones(64)), -1, 0, -1, 0, -1, 0, -1, 0)
+        @test lv2_out(o) ≈ ones(64)
+        lv2_close!()
+        @test_throws ErrorException lv2_open!(
+            LV2_PATH; uri = SIDEG, block_size = 64, channels = 2
+        )
     end
 
     @testset "open reports the configuration actually in force" begin
@@ -218,153 +201,147 @@ end
         @test isnan(AP.lv2_process(1.0, 0, 1.0, -1, 0, -1, 0, -1, 0))
     end
 
-    if !LV2_HAS_ATOM
-        @info "LV2Host_jll $(lv2_lib_path()) predates lv2_in_midi: the atom-port " *
-            "discovery, MIDI and refusal tests are covered by test/probe_lv2.c " *
-            "until the JLL is rebuilt"
-    else
-        @testset "atom ports are discovered, sized and typed" begin
-            lv2_open!(LV2_MIDI_PATH; uri = NG, block_size = 64)
-            @test lv2_is_open()
-            ports = lv2_atom_ports()
-            @test length(ports) == 3
-            @test (ports[1].index, ports[1].input, ports[1].midi) == (0, true, false)
-            @test (ports[2].index, ports[2].input, ports[2].midi) == (1, true, true)
-            @test (ports[3].index, ports[3].input, ports[3].midi) == (2, false, true)
-            @test ports[2].size == 16384     # rsz:minimumSize honoured
-            @test ports[3].size == 8192      # undeclared gets the host floor
-            @test lv2_param_count() == 0     # a control output is not a parameter
-            # No input block armed yet: queueing an event is an error.
-            @test_throws ErrorException lv2_midi!(1.0, 1, 0, 0x90, 60, 100)
+    @testset "atom ports are discovered, sized and typed" begin
+        lv2_open!(LV2_MIDI_PATH; uri = NG, block_size = 64)
+        @test lv2_is_open()
+        ports = lv2_atom_ports()
+        @test length(ports) == 3
+        @test (ports[1].index, ports[1].input, ports[1].midi) == (0, true, false)
+        @test (ports[2].index, ports[2].input, ports[2].midi) == (1, true, true)
+        @test (ports[3].index, ports[3].input, ports[3].midi) == (2, false, true)
+        @test ports[2].size == 16384     # rsz:minimumSize honoured
+        @test ports[3].size == 8192      # undeclared gets the host floor
+        @test lv2_param_count() == 0     # a control output is not a parameter
+        # No input block armed yet: queueing an event is an error.
+        @test_throws ErrorException lv2_midi!(1.0, 1, 0, 0x90, 60, 100)
+    end
+
+    @testset "MIDI events gate the output sample-exactly" begin
+        # Note-on at frame 16 opens the gate at velocity 127/127 == 1.0;
+        # a control change at 32 echoes but changes nothing.
+        t = lv2_fill!(ones(64))
+        @test lv2_midi!(t, 1, 16, 0x90, 60, 127) == t
+        @test lv2_midi!(t, 1, 32, 0xB0, 1, 2) == t
+        @test_throws ErrorException lv2_midi!(t - 1, 1, 0, 0x90, 60, 100)  # stale token
+        o = AP.lv2_process(t, -1, 0, -1, 0, -1, 0, -1, 0)
+        @test lv2_out(o) ≈ [zeros(16); ones(48)]
+        @test lv2_port_value(5) == 2.0     # both events echoed to midi_out
+        @test isnan(lv2_param_value(5))    # a control output is not a parameter
+        @test isnan(lv2_port_value(3))     # an audio port has no port value
+        # The block is consumed: a second process on it refuses.
+        @test isnan(AP.lv2_process(t, -1, 0, -1, 0, -1, 0, -1, 0))
+
+        # A refused event poisons the armed block: the process that
+        # follows refuses rather than runs without it.
+        t = lv2_fill!(ones(64))
+        @test lv2_midi!(t, 1, 10, 0x90, 60, 100) == t
+        @test_throws ErrorException lv2_midi!(t, 1, 4, 0x90, 60, 100)   # out of order
+        @test_throws ErrorException lv2_midi!(t, 1, 64, 0x90, 60, 100)  # frame >= block
+        @test_throws ErrorException lv2_midi!(t, 3, 0, 0x90, 60, 100)   # an audio port
+        @test_throws ErrorException lv2_midi!(t, 2, 0, 0x90, 60, 100)   # an atom output
+        @test_throws ErrorException lv2_midi!(t, 0, 0, 0x90, 60, 100)   # not MidiEvent
+        @test_throws ErrorException lv2_midi!(t, 1, 0, 0x10)            # data byte as status
+        @test_throws ErrorException lv2_midi!(t, 1, 0, 0x90, 0x80)      # status byte as data
+        @test_throws ErrorException lv2_midi!(t, 1, 0, 0x90, -1, 64)    # byte after a gap
+        @test_throws ErrorException lv2_midi!(t, 1, 0, 0x90, 60, 300)   # out-of-range byte
+        @test_throws ErrorException lv2_midi!(t, 1, 0, 0x90)            # 1-byte note-on
+        @test_throws ErrorException lv2_midi!(t, 1, 0, 0x90, 60)        # 2-byte note-on
+        @test_throws ErrorException lv2_midi!(t, 1, 0, 0xC0, 5, 9)      # 3-byte program change
+        @test_throws ErrorException lv2_midi!(t, 1, 0, 0xF4)            # undefined status
+        @test_throws ErrorException lv2_midi!(t, 1, 0, 0xF0, 1, 2)      # sysex
+        @test isnan(AP.lv2_process(t, -1, 0, -1, 0, -1, 0, -1, 0))
+
+        # Complete short messages queue and echo.
+        t = lv2_fill!(ones(64))
+        @test lv2_midi!(t, 1, 0, 0xC0, 5) == t
+        @test lv2_midi!(t, 1, 8, 0xF8) == t
+        o = AP.lv2_process(t, -1, 0, -1, 0, -1, 0, -1, 0)
+        @test !isnan(o) && lv2_port_value(5) == 2.0
+
+        # A block with no events: the gate stays open.
+        o = AP.lv2_process(lv2_fill!(ones(64)), -1, 0, -1, 0, -1, 0, -1, 0)
+        @test lv2_out(o) ≈ ones(64)
+        @test lv2_port_value(5) == 0.0
+
+        # Note-off at frame 0 closes the gate; the event still echoes,
+        # which only works when the host re-heads the output each run.
+        t = lv2_fill!(ones(64))
+        lv2_midi!(t, 1, 0, 0x80, 60, 0)
+        o = AP.lv2_process(t, -1, 0, -1, 0, -1, 0, -1, 0)
+        @test AP.lv2_out_peak(o) == 0.0
+        @test lv2_port_value(5) == 1.0
+
+        # A velocity-64 note-on reopens it at gain 64/127.
+        t = lv2_fill!(ones(64))
+        lv2_midi!(t, 1, 0, 0x90, 60, 64)
+        o = AP.lv2_process(t, -1, 0, -1, 0, -1, 0, -1, 0)
+        @test lv2_out(o)[1] ≈ 64 / 127 atol = 1.0e-6
+
+        # midi_out's 8 KiB buffer holds 340 events of 24 padded bytes; the
+        # 341st echo is dropped rather than written past the buffer.
+        t = lv2_fill!(ones(64))
+        for _ in 1:400
+            lv2_midi!(t, 1, 0, 0x90, 60, 100)
         end
+        o = AP.lv2_process(t, -1, 0, -1, 0, -1, 0, -1, 0)
+        @test lv2_port_value(5) == 340.0
+        lv2_close!()
+    end
 
-        @testset "MIDI events gate the output sample-exactly" begin
-            # Note-on at frame 16 opens the gate at velocity 127/127 == 1.0;
-            # a control change at 32 echoes but changes nothing.
-            t = lv2_fill!(ones(64))
-            @test lv2_midi!(t, 1, 16, 0x90, 60, 127) == t
-            @test lv2_midi!(t, 1, 32, 0xB0, 1, 2) == t
-            @test_throws ErrorException lv2_midi!(t - 1, 1, 0, 0x90, 60, 100)  # stale token
-            o = AP.lv2_process(t, -1, 0, -1, 0, -1, 0, -1, 0)
-            @test lv2_out(o) ≈ [zeros(16); ones(48)]
-            @test lv2_port_value(5) == 2.0     # both events echoed to midi_out
-            @test isnan(lv2_param_value(5))    # a control output is not a parameter
-            @test isnan(lv2_port_value(3))     # an audio port has no port value
-            # The block is consumed: a second process on it refuses.
-            @test isnan(AP.lv2_process(t, -1, 0, -1, 0, -1, 0, -1, 0))
-
-            # A refused event poisons the armed block: the process that
-            # follows refuses rather than runs without it.
-            t = lv2_fill!(ones(64))
-            @test lv2_midi!(t, 1, 10, 0x90, 60, 100) == t
-            @test_throws ErrorException lv2_midi!(t, 1, 4, 0x90, 60, 100)   # out of order
-            @test_throws ErrorException lv2_midi!(t, 1, 64, 0x90, 60, 100)  # frame >= block
-            @test_throws ErrorException lv2_midi!(t, 3, 0, 0x90, 60, 100)   # an audio port
-            @test_throws ErrorException lv2_midi!(t, 2, 0, 0x90, 60, 100)   # an atom output
-            @test_throws ErrorException lv2_midi!(t, 0, 0, 0x90, 60, 100)   # not MidiEvent
-            @test_throws ErrorException lv2_midi!(t, 1, 0, 0x10)            # data byte as status
-            @test_throws ErrorException lv2_midi!(t, 1, 0, 0x90, 0x80)      # status byte as data
-            @test_throws ErrorException lv2_midi!(t, 1, 0, 0x90, -1, 64)    # byte after a gap
-            @test_throws ErrorException lv2_midi!(t, 1, 0, 0x90, 60, 300)   # out-of-range byte
-            @test_throws ErrorException lv2_midi!(t, 1, 0, 0x90)            # 1-byte note-on
-            @test_throws ErrorException lv2_midi!(t, 1, 0, 0x90, 60)        # 2-byte note-on
-            @test_throws ErrorException lv2_midi!(t, 1, 0, 0xC0, 5, 9)      # 3-byte program change
-            @test_throws ErrorException lv2_midi!(t, 1, 0, 0xF4)            # undefined status
-            @test_throws ErrorException lv2_midi!(t, 1, 0, 0xF0, 1, 2)      # sysex
-            @test isnan(AP.lv2_process(t, -1, 0, -1, 0, -1, 0, -1, 0))
-
-            # Complete short messages queue and echo.
-            t = lv2_fill!(ones(64))
-            @test lv2_midi!(t, 1, 0, 0xC0, 5) == t
-            @test lv2_midi!(t, 1, 8, 0xF8) == t
-            o = AP.lv2_process(t, -1, 0, -1, 0, -1, 0, -1, 0)
-            @test !isnan(o) && lv2_port_value(5) == 2.0
-
-            # A block with no events: the gate stays open.
-            o = AP.lv2_process(lv2_fill!(ones(64)), -1, 0, -1, 0, -1, 0, -1, 0)
-            @test lv2_out(o) ≈ ones(64)
-            @test lv2_port_value(5) == 0.0
-
-            # Note-off at frame 0 closes the gate; the event still echoes,
-            # which only works when the host re-heads the output each run.
-            t = lv2_fill!(ones(64))
-            lv2_midi!(t, 1, 0, 0x80, 60, 0)
-            o = AP.lv2_process(t, -1, 0, -1, 0, -1, 0, -1, 0)
-            @test AP.lv2_out_peak(o) == 0.0
-            @test lv2_port_value(5) == 1.0
-
-            # A velocity-64 note-on reopens it at gain 64/127.
-            t = lv2_fill!(ones(64))
-            lv2_midi!(t, 1, 0, 0x90, 60, 64)
-            o = AP.lv2_process(t, -1, 0, -1, 0, -1, 0, -1, 0)
-            @test lv2_out(o)[1] ≈ 64 / 127 atol = 1.0e-6
-
-            # midi_out's 8 KiB buffer holds 340 events of 24 padded bytes; the
-            # 341st echo is dropped rather than written past the buffer.
-            t = lv2_fill!(ones(64))
-            for _ in 1:400
-                lv2_midi!(t, 1, 0, 0x90, 60, 100)
-            end
-            o = AP.lv2_process(t, -1, 0, -1, 0, -1, 0, -1, 0)
-            @test lv2_port_value(5) == 340.0
-            lv2_close!()
+    @testset "plugins the host must refuse" begin
+        # Turtle-only bundles like CProbe.yml's lv2many: the port census
+        # runs before instantiation, so no binary is needed.
+        refuse = mktempdir()
+        bundle = joinpath(refuse, "ap_refuse.lv2")
+        mkpath(bundle)
+        open(joinpath(bundle, "manifest.ttl"), "w") do io
+            println(io, "@prefix lv2:  <http://lv2plug.in/ns/lv2core#> .")
+            println(io, "@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .")
+            println(
+                io, "<urn:audioplugins:test:manyatom> a lv2:Plugin ; ",
+                "rdfs:seeAlso <ap_refuse.ttl> ."
+            )
+            println(
+                io, "<urn:audioplugins:test:chunkatom> a lv2:Plugin ; ",
+                "rdfs:seeAlso <ap_refuse.ttl> ."
+            )
         end
-
-        @testset "plugins the host must refuse" begin
-            # Turtle-only bundles like CProbe.yml's lv2many: the port census
-            # runs before instantiation, so no binary is needed.
-            refuse = mktempdir()
-            bundle = joinpath(refuse, "ap_refuse.lv2")
-            mkpath(bundle)
-            open(joinpath(bundle, "manifest.ttl"), "w") do io
-                println(io, "@prefix lv2:  <http://lv2plug.in/ns/lv2core#> .")
-                println(io, "@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .")
-                println(
-                    io, "<urn:audioplugins:test:manyatom> a lv2:Plugin ; ",
-                    "rdfs:seeAlso <ap_refuse.ttl> ."
-                )
-                println(
-                    io, "<urn:audioplugins:test:chunkatom> a lv2:Plugin ; ",
-                    "rdfs:seeAlso <ap_refuse.ttl> ."
-                )
-            end
-            open(joinpath(bundle, "ap_refuse.ttl"), "w") do io
-                println(io, "@prefix lv2:  <http://lv2plug.in/ns/lv2core#> .")
-                println(io, "@prefix atom: <http://lv2plug.in/ns/ext/atom#> .")
-                println(io, "@prefix doap: <http://usefulinc.com/ns/doap#> .")
+        open(joinpath(bundle, "ap_refuse.ttl"), "w") do io
+            println(io, "@prefix lv2:  <http://lv2plug.in/ns/lv2core#> .")
+            println(io, "@prefix atom: <http://lv2plug.in/ns/ext/atom#> .")
+            println(io, "@prefix doap: <http://usefulinc.com/ns/doap#> .")
+            print(
+                io, "<urn:audioplugins:test:manyatom> a lv2:Plugin ; ",
+                "doap:name \"AudioPlugins Test Many Atom\" ; lv2:port"
+            )
+            for i in 0:32
                 print(
-                    io, "<urn:audioplugins:test:manyatom> a lv2:Plugin ; ",
-                    "doap:name \"AudioPlugins Test Many Atom\" ; lv2:port"
-                )
-                for i in 0:32
-                    print(
-                        io, " [ a lv2:InputPort, atom:AtomPort ; lv2:index $i ; ",
-                        "lv2:symbol \"a$i\" ; lv2:name \"a$i\" ] ,"
-                    )
-                end
-                println(
-                    io, " [ a lv2:OutputPort, lv2:AudioPort ; lv2:index 33 ; ",
-                    "lv2:symbol \"out\" ; lv2:name \"Out\" ] ."
-                )
-                println(
-                    io, "<urn:audioplugins:test:chunkatom> a lv2:Plugin ; ",
-                    "doap:name \"AudioPlugins Test Chunk Atom\" ; lv2:port ",
-                    "[ a lv2:InputPort, atom:AtomPort ; lv2:index 0 ; ",
-                    "lv2:symbol \"chunk\" ; lv2:name \"chunk\" ; atom:bufferType atom:Chunk ] , ",
-                    "[ a lv2:OutputPort, lv2:AudioPort ; lv2:index 1 ; ",
-                    "lv2:symbol \"out\" ; lv2:name \"Out\" ] ."
+                    io, " [ a lv2:InputPort, atom:AtomPort ; lv2:index $i ; ",
+                    "lv2:symbol \"a$i\" ; lv2:name \"a$i\" ] ,"
                 )
             end
-            rpath = lv2_default_path(refuse)
-            @test_throws ErrorException lv2_open!(
-                rpath; uri = "urn:audioplugins:test:manyatom", block_size = 64
+            println(
+                io, " [ a lv2:OutputPort, lv2:AudioPort ; lv2:index 33 ; ",
+                "lv2:symbol \"out\" ; lv2:name \"Out\" ] ."
             )
-            @test occursin("more than", lv2_last_error())
-            @test_throws ErrorException lv2_open!(
-                rpath; uri = "urn:audioplugins:test:chunkatom", block_size = 64
+            println(
+                io, "<urn:audioplugins:test:chunkatom> a lv2:Plugin ; ",
+                "doap:name \"AudioPlugins Test Chunk Atom\" ; lv2:port ",
+                "[ a lv2:InputPort, atom:AtomPort ; lv2:index 0 ; ",
+                "lv2:symbol \"chunk\" ; lv2:name \"chunk\" ; atom:bufferType atom:Chunk ] , ",
+                "[ a lv2:OutputPort, lv2:AudioPort ; lv2:index 1 ; ",
+                "lv2:symbol \"out\" ; lv2:name \"Out\" ] ."
             )
-            @test occursin("bufferType", lv2_last_error())
         end
+        rpath = lv2_default_path(refuse)
+        @test_throws ErrorException lv2_open!(
+            rpath; uri = "urn:audioplugins:test:manyatom", block_size = 64
+        )
+        @test occursin("more than", lv2_last_error())
+        @test_throws ErrorException lv2_open!(
+            rpath; uri = "urn:audioplugins:test:chunkatom", block_size = 64
+        )
+        @test occursin("bufferType", lv2_last_error())
     end
 
     # Real third-party bundles, when the machine has some: discovery must

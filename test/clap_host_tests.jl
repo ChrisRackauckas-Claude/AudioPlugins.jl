@@ -14,14 +14,6 @@ const AP = AudioPlugins
 
 const BUNDLE = clap_test_bundle()
 
-# CLAPHost_jll ships a prebuilt build of `csrc/clap_host.c`, so a change to that
-# source reaches Julia only once the JLL has been rebuilt and the compat bound
-# raised. Tests for newer host entry points gate on the export rather than a
-# version number and switch themselves on when the JLL catches up; the
-# C-level coverage that runs on every PR is `test/probe.c`.
-const HOST_HAS_CHAIN = AP._host_exports(:clap_set_param)
-const HOST_HAS_PORTS = AP._host_exports(:clap_host_n_audio_in)
-
 # The eight-parameter fixture, built once. It is not part of `clap_test_bundle`
 # because that bundle's contents are documented and exercised by the README:
 # widening it would rewrite examples that have nothing to do with parameters.
@@ -359,167 +351,157 @@ else
             @test first_of_fresh ≈ 0.25 atol = 1.0e-6    # y = 0 + 0.25*(1-0)
         end
 
-        if !HOST_HAS_CHAIN
-            @info "CLAPHost_jll $(clap_lib_path()) predates clap_set_param: the chained " *
-                "parameter and clp_expect tests are covered by test/probe.c until it is rebuilt"
-        else
-            @testset "a parameter chain drives more parameters than there are slots" begin
-                # ap.weights has eight parameters and clap_process has four slots,
-                # so this is the case the chain exists for. The weights are powers
-                # of two, so the assertion pins down which value reached which id
-                # rather than only that eight numbers arrived.
-                many = many_bundle()
+        @testset "a parameter chain drives more parameters than there are slots" begin
+            # ap.weights has eight parameters and clap_process has four slots,
+            # so this is the case the chain exists for. The weights are powers
+            # of two, so the assertion pins down which value reached which id
+            # rather than only that eight numbers arrived.
+            many = many_bundle()
 
-                clap_open!(many; sample_rate = 48000, block_size = 8, channels = 1)
-                @test clap_param_count() == 8
-                @test clap_plugin_index() == 0
+            clap_open!(many; sample_rate = 48000, block_size = 8, channels = 1)
+            @test clap_param_count() == 8
+            @test clap_plugin_index() == 0
 
-                vals = [k / 16 for k in 0:7]
-                g = sum((2.0^k) * vals[k + 1] for k in 0:7)
+            vals = [k / 16 for k in 0:7]
+            g = sum((2.0^k) * vals[k + 1] for k in 0:7)
 
-                tok = clap_fill!(ones(8))
-                for k in 0:7
-                    tok = AP.clp_set(tok, k, vals[k + 1])
-                end
-                y = clap_out(AP.clp_process(tok, -1, 0, -1, 0, -1, 0, -1, 0))
-                @test all(≈(g; rtol = 1.0e-6), y)
-
-                # Held across a block: the second block queues no event, and the
-                # output is the same -- change detection must not mean "forgotten".
-                tok = clap_fill!(ones(8))
-                for k in 0:7
-                    tok = AP.clp_set(tok, k, vals[k + 1])
-                end
-                y2 = clap_out(AP.clp_process(tok, -1, 0, -1, 0, -1, 0, -1, 0))
-                @test y2 == y
-
-                # One parameter moved, seven held.
-                tok = clap_fill!(ones(8))
-                for k in 0:7
-                    tok = AP.clp_set(tok, k, k == 7 ? 1.0 : vals[k + 1])
-                end
-                y3 = clap_out(AP.clp_process(tok, -1, 0, -1, 0, -1, 0, -1, 0))
-                @test all(≈(g + 128 * (1 - vals[8]); rtol = 1.0e-6), y3)
+            tok = clap_fill!(ones(8))
+            for k in 0:7
+                tok = AP.clp_set(tok, k, vals[k + 1])
             end
+            y = clap_out(AP.clp_process(tok, -1, 0, -1, 0, -1, 0, -1, 0))
+            @test all(≈(g; rtol = 1.0e-6), y)
 
-            @testset "the chain and the four slots compose" begin
-                many = many_bundle()
-                clap_open!(many; sample_rate = 48000, block_size = 8, channels = 1)
-                # ids 0 and 1 through the slots, id 7 through the chain.
-                tok = AP.clp_set(clap_fill!(ones(8)), 7, 0.5)
-                y = clap_out(AP.clp_process(tok, 0, 1.0, 1, 1.0, -1, 0, -1, 0))
-                @test all(≈(1 + 2 + 64; rtol = 1.0e-6), y)
+            # Held across a block: the second block queues no event, and the
+            # output is the same -- change detection must not mean "forgotten".
+            tok = clap_fill!(ones(8))
+            for k in 0:7
+                tok = AP.clp_set(tok, k, vals[k + 1])
             end
+            y2 = clap_out(AP.clp_process(tok, -1, 0, -1, 0, -1, 0, -1, 0))
+            @test y2 == y
 
-            @testset "a chain refuses rather than guessing" begin
-                many = many_bundle()
-                clap_open!(many; sample_rate = 48000, block_size = 8, channels = 1)
-                tok = clap_fill!(ones(8))
-
-                @test isnan(AP.clp_set(tok, 8, 0.5))          # no such parameter
-                @test isnan(AP.clp_set(tok, -1, 0.5))         # nor a negative one
-                @test isnan(AP.clp_set(tok, 0, NaN))          # nor a value of NaN
-                @test isnan(AP.clp_set(tok + 1, 0, 0.5))      # nor a stale block
-                @test isnan(AP.clp_set(NaN, 0, 0.5))
-                # A refusal poisons the chain rather than being skipped over.
-                @test isnan(AP.clp_process(AP.clp_set(NaN, 0, 0.5), -1, 0, -1, 0, -1, 0, -1, 0))
-
-                # An abandoned chain does not leak into the next block: id 0 was
-                # queued and never processed, so the block that follows sees the
-                # plugin's own defaults and multiplies by zero.
-                AP.clp_set(tok, 0, 1.0)
-                tok2 = clap_fill!(ones(8))
-                y = clap_out(AP.clp_process(tok2, -1, 0, -1, 0, -1, 0, -1, 0))
-                @test all(iszero, y)
+            # One parameter moved, seven held.
+            tok = clap_fill!(ones(8))
+            for k in 0:7
+                tok = AP.clp_set(tok, k, k == 7 ? 1.0 : vals[k + 1])
             end
-
-            @testset "clp_expect refuses the wrong plugin" begin
-                # The host holds one plugin at a time and the driver is what opens
-                # it, so a model built for one plugin has to be able to say so.
-                clap_open!(BUNDLE; plugin_id = "ap.onepole", block_size = 8, channels = 1)
-                @test clap_plugin_index() == 1
-                tok = clap_fill!(ones(8))
-                @test AP.clp_expect(tok, 1) == tok
-                @test isnan(AP.clp_expect(tok, 0))
-                @test isnan(AP.clp_expect(tok, 2))
-                @test isnan(AP.clp_expect(NaN, 1))
-                # And the refusal reaches the output rather than stopping at the guard.
-                @test isnan(AP.clp_process(AP.clp_expect(tok, 0), 0, 0.25, -1, 0, -1, 0, -1, 0))
-                clap_close!()
-                @test clap_plugin_index() == -1
-                @test isnan(AP.clp_expect(1.0, 0))
-            end
+            y3 = clap_out(AP.clp_process(tok, -1, 0, -1, 0, -1, 0, -1, 0))
+            @test all(≈(g + 128 * (1 - vals[8]); rtol = 1.0e-6), y3)
         end
 
-        if !HOST_HAS_PORTS
-            @info "CLAPHost_jll $(clap_lib_path()) predates clap_host_n_audio_in: the " *
-                "declared-layout tests are covered by test/probe.c until it is rebuilt"
-        else
-            @testset "the plugin's declared audio layout is what process() gets" begin
-                sc = sidechain_bundle()
-                plugs = clap_scan(sc)
-                @test [p.id for p in plugs] == [
-                    "ap.sidechain", "ap.sidechain.stereo", "ap.mixdown",
-                    "ap.silent", "ap.source",
-                ]
-                x = [sin(0.1 * i) for i in 0:63]
-                proc(tok) = clap_out(AP.clp_process(tok, -1, 0, -1, 0, -1, 0, -1, 0))
+        @testset "the chain and the four slots compose" begin
+            many = many_bundle()
+            clap_open!(many; sample_rate = 48000, block_size = 8, channels = 1)
+            # ids 0 and 1 through the slots, id 7 through the chain.
+            tok = AP.clp_set(clap_fill!(ones(8)), 7, 0.5)
+            y = clap_out(AP.clp_process(tok, 0, 1.0, 1, 1.0, -1, 0, -1, 0))
+            @test all(≈(1 + 2 + 64; rtol = 1.0e-6), y)
+        end
 
-                # ZamComp's layout: the unrouted sidechain reads silence, so
-                # out = in * sidechain is zero.
-                clap_open!(sc; plugin_id = "ap.sidechain", block_size = 64, channels = 1)
-                @test clap_n_audio_in() == 2
-                @test clap_n_audio_out() == 1
-                @test proc(clap_fill!(x)) ≈ zeros(Float32, 64) atol = 1.0e-6
-                clap_close!()
+        @testset "a chain refuses rather than guessing" begin
+            many = many_bundle()
+            clap_open!(many; sample_rate = 48000, block_size = 8, channels = 1)
+            tok = clap_fill!(ones(8))
 
-                # A stereo block into a mono main input is refused at open.
-                @test_throws ErrorException clap_open!(
-                    sc; plugin_id = "ap.sidechain", block_size = 64, channels = 2
-                )
-                @test occursin("input channel", clap_last_error())
-                @test !clap_is_open()
+            @test isnan(AP.clp_set(tok, 8, 0.5))          # no such parameter
+            @test isnan(AP.clp_set(tok, -1, 0.5))         # nor a negative one
+            @test isnan(AP.clp_set(tok, 0, NaN))          # nor a value of NaN
+            @test isnan(AP.clp_set(tok + 1, 0, 0.5))      # nor a stale block
+            @test isnan(AP.clp_set(NaN, 0, 0.5))
+            # A refusal poisons the chain rather than being skipped over.
+            @test isnan(AP.clp_process(AP.clp_set(NaN, 0, 0.5), -1, 0, -1, 0, -1, 0, -1, 0))
 
-                # ZamCompX2's layout: the aux input and out[1] echoing it are
-                # silent.
-                clap_open!(
-                    sc; plugin_id = "ap.sidechain.stereo", block_size = 64, channels = 2
-                )
-                @test clap_n_audio_in() == 3
-                @test clap_n_audio_out() == 2
-                inter = vec(permutedims([x fill(0.5, 64)]))
-                o = AP.clp_process(clap_fill!(inter; channels = 2), -1, 0, -1, 0, -1, 0, -1, 0)
-                @test clap_out(o; channel = 0) ≈ Float32.(x) atol = 1.0e-6
-                @test clap_out(o; channel = 1) ≈ zeros(Float32, 64) atol = 1.0e-6
-                clap_close!()
+            # An abandoned chain does not leak into the next block: id 0 was
+            # queued and never processed, so the block that follows sees the
+            # plugin's own defaults and multiplies by zero.
+            AP.clp_set(tok, 0, 1.0)
+            tok2 = clap_fill!(ones(8))
+            y = clap_out(AP.clp_process(tok2, -1, 0, -1, 0, -1, 0, -1, 0))
+            @test all(iszero, y)
+        end
 
-                # The one declared output channel is duplicated onto both
-                # host channels.
-                clap_open!(sc; plugin_id = "ap.mixdown", block_size = 64, channels = 2)
-                @test clap_n_audio_in() == 2
-                @test clap_n_audio_out() == 1
-                o = AP.clp_process(clap_fill!(inter; channels = 2), -1, 0, -1, 0, -1, 0, -1, 0)
-                @test clap_out(o; channel = 0) ≈ 0.5f0 .* (Float32.(x) .+ 0.5f0) atol = 1.0e-6
-                @test clap_out(o; channel = 1) == clap_out(o; channel = 0)
-                clap_close!()
+        @testset "clp_expect refuses the wrong plugin" begin
+            # The host holds one plugin at a time and the driver is what opens
+            # it, so a model built for one plugin has to be able to say so.
+            clap_open!(BUNDLE; plugin_id = "ap.onepole", block_size = 8, channels = 1)
+            @test clap_plugin_index() == 1
+            tok = clap_fill!(ones(8))
+            @test AP.clp_expect(tok, 1) == tok
+            @test isnan(AP.clp_expect(tok, 0))
+            @test isnan(AP.clp_expect(tok, 2))
+            @test isnan(AP.clp_expect(NaN, 1))
+            # And the refusal reaches the output rather than stopping at the guard.
+            @test isnan(AP.clp_process(AP.clp_expect(tok, 0), 0, 0.25, -1, 0, -1, 0, -1, 0))
+            clap_close!()
+            @test clap_plugin_index() == -1
+            @test isnan(AP.clp_expect(1.0, 0))
+        end
 
-                # No outputs is silence; no inputs opens and generates.
-                clap_open!(sc; plugin_id = "ap.silent", block_size = 64, channels = 1)
-                @test clap_n_audio_in() == 1 && clap_n_audio_out() == 0
-                @test proc(clap_fill!(x)) == zeros(Float32, 64)
-                clap_close!()
-                clap_open!(sc; plugin_id = "ap.source", block_size = 64, channels = 1)
-                @test clap_n_audio_in() == 0 && clap_n_audio_out() == 1
-                @test proc(clap_fill!(x)) ≈ fill(0.25f0, 64) atol = 1.0e-6
-                clap_close!()
+        @testset "the plugin's declared audio layout is what process() gets" begin
+            sc = sidechain_bundle()
+            plugs = clap_scan(sc)
+            @test [p.id for p in plugs] == [
+                "ap.sidechain", "ap.sidechain.stereo", "ap.mixdown",
+                "ap.silent", "ap.source",
+            ]
+            x = [sin(0.1 * i) for i in 0:63]
+            proc(tok) = clap_out(AP.clp_process(tok, -1, 0, -1, 0, -1, 0, -1, 0))
 
-                clap_open!(BUNDLE; plugin_id = "ap.gain", block_size = 64, channels = 1)
-                @test clap_n_audio_in() == 2
-                @test clap_n_audio_out() == 2
-                clap_close!()
-                @test clap_n_audio_in() == 0
-                @test clap_n_audio_out() == 0
-            end
+            # ZamComp's layout: the unrouted sidechain reads silence, so
+            # out = in * sidechain is zero.
+            clap_open!(sc; plugin_id = "ap.sidechain", block_size = 64, channels = 1)
+            @test clap_n_audio_in() == 2
+            @test clap_n_audio_out() == 1
+            @test proc(clap_fill!(x)) ≈ zeros(Float32, 64) atol = 1.0e-6
+            clap_close!()
+
+            # A stereo block into a mono main input is refused at open.
+            @test_throws ErrorException clap_open!(
+                sc; plugin_id = "ap.sidechain", block_size = 64, channels = 2
+            )
+            @test occursin("input channel", clap_last_error())
+            @test !clap_is_open()
+
+            # ZamCompX2's layout: the aux input and out[1] echoing it are
+            # silent.
+            clap_open!(
+                sc; plugin_id = "ap.sidechain.stereo", block_size = 64, channels = 2
+            )
+            @test clap_n_audio_in() == 3
+            @test clap_n_audio_out() == 2
+            inter = vec(permutedims([x fill(0.5, 64)]))
+            o = AP.clp_process(clap_fill!(inter; channels = 2), -1, 0, -1, 0, -1, 0, -1, 0)
+            @test clap_out(o; channel = 0) ≈ Float32.(x) atol = 1.0e-6
+            @test clap_out(o; channel = 1) ≈ zeros(Float32, 64) atol = 1.0e-6
+            clap_close!()
+
+            # The one declared output channel is duplicated onto both
+            # host channels.
+            clap_open!(sc; plugin_id = "ap.mixdown", block_size = 64, channels = 2)
+            @test clap_n_audio_in() == 2
+            @test clap_n_audio_out() == 1
+            o = AP.clp_process(clap_fill!(inter; channels = 2), -1, 0, -1, 0, -1, 0, -1, 0)
+            @test clap_out(o; channel = 0) ≈ 0.5f0 .* (Float32.(x) .+ 0.5f0) atol = 1.0e-6
+            @test clap_out(o; channel = 1) == clap_out(o; channel = 0)
+            clap_close!()
+
+            # No outputs is silence; no inputs opens and generates.
+            clap_open!(sc; plugin_id = "ap.silent", block_size = 64, channels = 1)
+            @test clap_n_audio_in() == 1 && clap_n_audio_out() == 0
+            @test proc(clap_fill!(x)) == zeros(Float32, 64)
+            clap_close!()
+            clap_open!(sc; plugin_id = "ap.source", block_size = 64, channels = 1)
+            @test clap_n_audio_in() == 0 && clap_n_audio_out() == 1
+            @test proc(clap_fill!(x)) ≈ fill(0.25f0, 64) atol = 1.0e-6
+            clap_close!()
+
+            clap_open!(BUNDLE; plugin_id = "ap.gain", block_size = 64, channels = 1)
+            @test clap_n_audio_in() == 2
+            @test clap_n_audio_out() == 2
+            clap_close!()
+            @test clap_n_audio_in() == 0
+            @test clap_n_audio_out() == 0
         end
 
         @testset "closing is clean and idempotent" begin
