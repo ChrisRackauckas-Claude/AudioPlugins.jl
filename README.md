@@ -129,8 +129,9 @@ that simply is not continuous audio.
 
 ## Testing without third-party binaries
 
-`test/plugins/ap_test_plugins.c` is a CLAP bundle written for this repository, and
-`test/plugins/ap_test_lv2.c` + `ap_test_lv2.ttl` the same three as an LV2 bundle,
+`test/plugins/ap_test_plugins.c` is a CLAP bundle written for this repository,
+`test/plugins/ap_test_lv2.c` + `ap_test_lv2.ttl` an LV2 bundle (the same three
+plus a two-input merge and a sidechain fixture for the channel policy),
 and `test/plugins/ap_test_vst3.cpp` the same three as a VST3 bundle: a gain, a
 one-pole filter, and a 16-sample lookahead. Hosting is only proved by hosting something,
 and depending on a third-party plugin would make the suite rest on a binary whose
@@ -367,12 +368,20 @@ the LV2 specification bundles from `lv2_jll` so lilv has the vocabulary to class
 it finds.
 
 The host offers four features (`urid:map`, `urid:unmap`, `bufsz:fixedBlockLength`,
-`bufsz:boundedBlockLength`) and connects audio and control ports. A plugin that
-*requires* anything else — an atom, CV or event port, or another host feature — is
-refused at `lv2_open!` with a message that says which. An unconnected required port is
-undefined behaviour in the LV2 specification, so refusing is the honest answer; plugins
-with only optional extras open fine. Parameter changes are written to the control port
-the plugin reads at `run()`, so a change lands on exactly the block it is passed with.
+`bufsz:boundedBlockLength`) and connects audio, control and `atom:AtomPort` ports.
+An atom port gets one `atom:Sequence` buffer, sized from its declared
+`rsz:minimumSize`; timestamped MIDI events reach an input port through
+`lv2_midi!` with sample-accurate frame offsets, and an output sequence is kept
+valid for the plugin to write (its contents are not decoded). A plugin that
+*requires* anything else — an atom buffer type other than Sequence, a CV or
+event port, or another host feature such as `worker:schedule` — is refused at
+`lv2_open!` with a message that says which. An unconnected required port is
+undefined behaviour in the LV2 specification, so refusing is the honest answer;
+plugins with only optional extras open fine. A plugin with fewer audio outputs
+than the requested channels has its last output repeated on the remaining
+channels, and one with no audio ports is silent — the shape of a MIDI tool.
+Parameter changes are written to the control port the plugin reads at `run()`,
+so a change lands on exactly the block it is passed with.
 
 The VST3 suite additionally hosts the SDK's own `again` example (the sample-accurate
 variant, prebuilt by `vst3sdk_jll`) and asserts its output is sample-exact.

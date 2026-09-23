@@ -1,0 +1,5 @@
+# LeakSanitizer suppressions for probe_lv2 (CProbe.yml).
+# lilv copies nodes into its world model while loading plugin classes;
+# a handful stay allocated past lilv_world_free. Narrow to that call
+# path: a host-side leak elsewhere must still be reported.
+leak:lilv_world_load_plugin_classes

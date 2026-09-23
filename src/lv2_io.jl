@@ -15,9 +15,10 @@
 export lv2_lib_path, lv2_src_path, lv2_default_path,
     lv2_scan, lv2_open!, lv2_close!,
     lv2_is_open, lv2_last_error, lv2_plugin_name, lv2_plugin_uri,
-    lv2_params, lv2_param_count, lv2_param_value, lv2_latency,
+    lv2_params, lv2_param_count, lv2_param_value, lv2_port_value, lv2_latency,
+    lv2_atom_ports, lv2_midi!,
     lv2_block_size, lv2_sample_rate, lv2_channels, lv2_n_process, lv2_reset_counters!,
-    lv2_fill!, lv2_out, lv2_test_bundle,
+    lv2_fill!, lv2_out, lv2_test_bundle, lv2_midi_test_bundle,
     LV2_WAVE_SILENCE, LV2_WAVE_SINE, LV2_WAVE_SQUARE, LV2_WAVE_RAMP, LV2_WAVE_IMPULSE
 
 using LV2Host_jll: LV2Host_jll, liblv2_host
@@ -97,48 +98,73 @@ function lv2_default_path(dirs::AbstractString...)
     return join([dirs..., spec], LV2_PATH_SEP)
 end
 
-"""
-    lv2_test_bundle(; force = false) -> String
-
-Build the LV2 bundle of test plugins that ships with this package
-(`test/plugins/ap_test_lv2.c` + `ap_test_lv2.ttl`: `urn:audioplugins:test:gain`,
-`:onepole`, `:lookahead`) into a per-package scratch space and return the
-directory that *contains* the bundle, ready to be passed as a search path.
-Needs a C compiler, like [`clap_test_bundle`](@ref), and only for tests.
-"""
-function lv2_test_bundle(; force::Bool = false)
+function _lv2_build_bundle(
+        cfile, ttlfile, bname, plugins, scratch, extra_flags; force
+    )
     plugdir = normpath(joinpath(@__DIR__, "..", "test", "plugins"))
-    src = joinpath(plugdir, "ap_test_lv2.c")
-    ttl = joinpath(plugdir, "ap_test_lv2.ttl")
-    root = @get_scratch!("test_plugins_lv2-$(Sys.ARCH)")
-    bundle = joinpath(root, "ap_test.lv2")
+    src = joinpath(plugdir, cfile)
+    ttl = joinpath(plugdir, ttlfile)
+    root = @get_scratch!(scratch)
+    bundle = joinpath(root, bname)
+    base = splitext(bname)[1]
     dlext = Sys.iswindows() ? "dll" : Sys.isapple() ? "dylib" : "so"
-    bin = joinpath(bundle, "ap_test." * dlext)
+    bin = joinpath(bundle, "$base.$dlext")
     stale(f) = !isfile(f) || stat(src).mtime > stat(f).mtime || stat(ttl).mtime > stat(f).mtime
     if force || stale(bin)
         cc = _c_compiler()
         cc === nothing && error(
-            "lv2_test_bundle: building the test plugins needs a C compiler on PATH " *
-                "(tried cc, gcc, clang). Hosting itself does not: the host library comes " *
-                "prebuilt from LV2Host_jll."
+            "building the LV2 test plugins needs a C compiler on PATH " *
+                "(tried cc, gcc, clang). Hosting itself does not: the host library " *
+                "comes prebuilt from LV2Host_jll."
         )
         mkpath(bundle)
-        run(`$cc $(_c_arch_flags()) -O2 -fPIC -shared -Wall -Wextra -o $bin $src`)
-        cp(ttl, joinpath(bundle, "ap_test.ttl"); force = true)
+        run(`$cc $(_c_arch_flags()) -O2 -fPIC -shared -Wall -Wextra $extra_flags -o $bin $src`)
+        cp(ttl, joinpath(bundle, "$base.ttl"); force = true)
         # The manifest names the binary, so it carries the platform's extension.
         open(joinpath(bundle, "manifest.ttl"), "w") do io
             println(io, "@prefix lv2:  <http://lv2plug.in/ns/lv2core#> .")
             println(io, "@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .")
-            for p in ("gain", "onepole", "lookahead")
+            for p in plugins
                 println(
                     io, "<urn:audioplugins:test:$p> a lv2:Plugin ; ",
-                    "lv2:binary <ap_test.$dlext> ; rdfs:seeAlso <ap_test.ttl> ."
+                    "lv2:binary <$base.$dlext> ; rdfs:seeAlso <$base.ttl> ."
                 )
             end
         end
     end
     return root
 end
+
+"""
+    lv2_test_bundle(; force = false) -> String
+
+Build the LV2 bundle of test plugins that ships with this package
+(`test/plugins/ap_test_lv2.c` + `ap_test_lv2.ttl`: `urn:audioplugins:test:gain`,
+`:onepole`, `:lookahead`, `:merge`, `:sidegain`) into a per-package scratch
+space and return the directory that *contains* the bundle, ready to be passed
+as a search path. Needs a C compiler, like [`clap_test_bundle`](@ref), and
+only for tests.
+"""
+lv2_test_bundle(; force::Bool = false) = _lv2_build_bundle(
+    "ap_test_lv2.c", "ap_test_lv2.ttl", "ap_test.lv2",
+    ("gain", "onepole", "lookahead", "merge", "sidegain"),
+    "test_plugins_lv2-$(Sys.ARCH)", ``; force = force
+)
+
+"""
+    lv2_midi_test_bundle(; force = false) -> String
+
+Build the MIDI LV2 test bundle `ap_midi.lv2` (`test/plugins/ap_test_midi_lv2.c`
++ `ap_test_midi_lv2.ttl`: `urn:audioplugins:test:notegain`, a note-gated gain
+whose atom input port is required) into a per-package scratch space and return
+the directory that *contains* the bundle, like [`lv2_test_bundle`](@ref). The
+fixture the [`lv2_midi!`](@ref) tests are written against.
+"""
+lv2_midi_test_bundle(; force::Bool = false) = _lv2_build_bundle(
+    "ap_test_midi_lv2.c", "ap_test_midi_lv2.ttl", "ap_midi.lv2",
+    ("notegain",), "test_plugins_lv2_midi-$(Sys.ARCH)",
+    `-I $(normpath(joinpath(@__DIR__, "..", "csrc", "vendor")))`; force = force
+)
 
 # ---------------------------------------------------------------------------
 # Driver-side lifecycle and discovery. Strings live here and nowhere else.
@@ -158,9 +184,9 @@ function lv2_scan(lv2_path::AbstractString)
     n < 0 && error("lv2_scan($(repr(lv2_path))) failed: $(lv2_last_error())")
     return [
         (
-            uri = unsafe_string(ccall((:lv2_host_scan_uri, LV2_LIB), Cstring, (Clong,), i)),
-            name = unsafe_string(ccall((:lv2_host_scan_name, LV2_LIB), Cstring, (Clong,), i)),
-        )
+                uri = unsafe_string(ccall((:lv2_host_scan_uri, LV2_LIB), Cstring, (Clong,), i)),
+                name = unsafe_string(ccall((:lv2_host_scan_name, LV2_LIB), Cstring, (Clong,), i)),
+            )
             for i in 0:(n - 1)
     ]
 end
@@ -169,12 +195,17 @@ end
     lv2_open!(lv2_path; uri = "", sample_rate = 48000, block_size = 512, channels = 1)
 
 Instantiate and activate the plugin `uri` found under `lv2_path` at a **fixed**
-block size. `channels` is the number of host audio channels: the k-th audio
-input port gets host channel `min(k, channels-1)` (a mono host feeds every
-input of a stereo plugin) and the k-th audio output port writes host channel
-k, or is discarded when `k >= channels`; the plugin must have at least
-`channels` audio outputs. Fails loudly for a plugin that requires a host
-feature or a port class this host does not provide.
+block size. `channels` is the number of host audio channels, and no host
+channel is silently dropped: a plugin with fewer **main** audio inputs than
+`channels` is refused rather than leave a host channel feeding nothing. The
+k-th main input gets host channel `min(k, channels-1)` (a mono host feeds
+every main input of a stereo plugin); the k-th main output writes host
+channel k, extras are discarded, and fewer main outputs than `channels` has
+the last output repeated on the remaining channels. Ports marked
+`lv2:isSideChain` or outside a declared `pg:mainInput`/`pg:mainOutput` group
+are non-main: sidechain inputs read silence and sidechain outputs are
+discarded, and neither counts toward the rule. Fails loudly for a plugin
+that requires a host feature or a port class this host does not provide.
 """
 function lv2_open!(
         lv2_path::AbstractString; uri::AbstractString = "",
@@ -304,13 +335,13 @@ function lv2_params()
     n = lv2_param_count()
     return [
         (
-            id = ccall((:lv2_host_param_id, LV2_LIB), Cdouble, (Clong,), i),
-            name = unsafe_string(ccall((:lv2_host_param_name, LV2_LIB), Cstring, (Clong,), i)),
-            symbol = unsafe_string(ccall((:lv2_host_param_symbol, LV2_LIB), Cstring, (Clong,), i)),
-            min = ccall((:lv2_host_param_min, LV2_LIB), Cdouble, (Clong,), i),
-            max = ccall((:lv2_host_param_max, LV2_LIB), Cdouble, (Clong,), i),
-            default = ccall((:lv2_host_param_default, LV2_LIB), Cdouble, (Clong,), i),
-        )
+                id = ccall((:lv2_host_param_id, LV2_LIB), Cdouble, (Clong,), i),
+                name = unsafe_string(ccall((:lv2_host_param_name, LV2_LIB), Cstring, (Clong,), i)),
+                symbol = unsafe_string(ccall((:lv2_host_param_symbol, LV2_LIB), Cstring, (Clong,), i)),
+                min = ccall((:lv2_host_param_min, LV2_LIB), Cdouble, (Clong,), i),
+                max = ccall((:lv2_host_param_max, LV2_LIB), Cdouble, (Clong,), i),
+                default = ccall((:lv2_host_param_default, LV2_LIB), Cdouble, (Clong,), i),
+            )
             for i in 0:(n - 1)
     ]
 end
@@ -318,6 +349,67 @@ end
 "The value connected to control input port `port_index`, or `NaN` if it is not one."
 lv2_param_value(port_index::Real) =
     ccall((:lv2_host_param_value, LV2_LIB), Cdouble, (Cdouble,), port_index)
+
+"""
+    lv2_port_value(port_index::Real) -> Float64
+
+The value connected to control port `port_index`, input **or** output, after
+the last block — so it also reads the values a plugin publishes back to the
+host, which [`lv2_param_value`](@ref) (control inputs only) cannot. `NaN` for
+a port that is not a control port.
+"""
+lv2_port_value(port_index::Real) =
+    ccall((:lv2_host_port_value, LV2_LIB), Cdouble, (Cdouble,), port_index)
+
+"""
+    lv2_atom_ports() -> Vector{@NamedTuple{index::Int, input::Bool, midi::Bool, size::Int}}
+
+The open plugin's atom ports. `index` is the LV2 port index, `input`/`midi`
+say whether it is an input port and whether it declares `atom:supports`
+`midi:MidiEvent` — the only ports [`lv2_midi!`](@ref) will write — and `size`
+is the buffer capacity in bytes: the declared `rsz:minimumSize`, or the
+host's floor when undeclared. Empty when the plugin has no atom ports.
+"""
+function lv2_atom_ports()
+    n = Int(ccall((:lv2_host_n_atom_ports, LV2_LIB), Cdouble, ()))
+    return [
+        (
+                index = Int(ccall((:lv2_host_atom_port_index, LV2_LIB), Cdouble, (Cdouble,), i)),
+                input = ccall((:lv2_host_atom_port_is_input, LV2_LIB), Cdouble, (Cdouble,), i) == 1.0,
+                midi = ccall((:lv2_host_atom_port_midi, LV2_LIB), Cdouble, (Cdouble,), i) == 1.0,
+                size = Int(ccall((:lv2_host_atom_port_size, LV2_LIB), Cdouble, (Cdouble,), i)),
+            )
+            for i in 0:(n - 1)
+    ]
+end
+
+"""
+    lv2_midi!(token, port, frame, bytes...) -> token
+
+Queue a MIDI event on atom input `port` at sample `frame` of the block `token`
+names — the token [`lv2_fill!`](@ref) (or `AudioPlugins.lv2_in_tone`) returned.
+Returns `token` so queued events chain into `AudioPlugins.lv2_process` the way
+`AudioPlugins.clp_set` chains into `clp_process`. `bytes` are the 1–3 message
+bytes: `b0` a status byte `0x80..0xFF`, the rest data bytes `0x00..0x7F`, e.g.
+`lv2_midi!(t, 0, 16, 0x90, 60, 100)` is a note-on at frame 16. The message
+must be complete for its status — a note-on is three bytes, a program change
+two, a clock one — and variable-length sysex is refused. Events must be
+queued in non-decreasing frame order. Throws the host's own message on a
+refused event — which also poisons the block: the `lv2_process` that follows
+refuses rather than run without it.
+"""
+function lv2_midi!(
+        token::Real, port::Integer, frame::Integer, b0::Integer,
+        b1::Integer = -1, b2::Integer = -1
+    )
+    r = ccall(
+        (:lv2_in_midi, LV2_LIB), Cdouble,
+        (Cdouble, Cdouble, Cdouble, Cdouble, Cdouble, Cdouble),
+        token, port, frame, b0, b1, b2
+    )
+    isnan(r) && error("lv2_midi!: $(lv2_last_error())")
+    return r
+end
 
 """
     lv2_fill!(samples; channels = 1) -> token
@@ -343,9 +435,9 @@ function lv2_out(token::Real; channel::Integer = 0)
     isnan(n) && return Float64[]
     return [
         ccall(
-            (:lv2_out_sample, LV2_LIB), Cdouble, (Cdouble, Cdouble, Cdouble),
-            token, i, channel
-        ) for i in 0:(Int(n) - 1)
+                (:lv2_out_sample, LV2_LIB), Cdouble, (Cdouble, Cdouble, Cdouble),
+                token, i, channel
+            ) for i in 0:(Int(n) - 1)
     ]
 end
 
@@ -370,7 +462,11 @@ lv2_in_tone(t, waveform, freq, amp) =
 
 The LV2 counterpart of [`AudioPlugins.clp_process`](@ref). The `id`s are control
 input **port indices** (see [`lv2_params`](@ref)) rather than CLAP parameter ids,
-and the values are the port's own plain units, not normalised.
+and the values are the port's own plain units, not normalised. One difference
+in the contract: `dep`'s block is **consumed** — afterwards [`lv2_in_sample`](@ref)
+returns `NaN` on it and a second `lv2_process` on the same `dep` refuses, so
+queued events can never replay. `clp_process` leaves the block readable and
+lets it run again.
 """
 lv2_process(dep, id0, v0, id1, v1, id2, v2, id3, v3) =
     ccall(
@@ -404,10 +500,30 @@ lv2_out_valid(dep) = ccall((:lv2_out_valid, LV2_LIB), Cdouble, (Cdouble,), dep)
 """
     AudioPlugins.lv2_in_sample(dep, i, ch) -> Float64
 
-The LV2 counterpart of [`AudioPlugins.clp_in_sample`](@ref).
+The LV2 counterpart of [`AudioPlugins.clp_in_sample`](@ref), with one
+difference: valid only while `dep`'s block is armed — [`lv2_process`](@ref)
+consumes it, after which this returns `NaN`. `clp_in_sample` stays readable
+after processing.
 """
 lv2_in_sample(dep, i, ch) =
     ccall((:lv2_in_sample, LV2_LIB), Cdouble, (Cdouble, Cdouble, Cdouble), dep, i, ch)
+"""
+    AudioPlugins.lv2_in_midi(dep, port, frame, b0[, b1[, b2]]) -> token
+
+Queue a MIDI event on atom input `port` at sample `frame` of the block `dep`
+names. Returns `dep` so queued events chain into [`lv2_process`](@ref), `NaN`
+on a refused event — which also poisons the block, so the `lv2_process` that
+follows refuses. A negative or `NaN` byte ends the message, and the message
+must be complete for its status byte (e.g. a note-on needs all three);
+variable-length sysex is refused. The driver-side [`lv2_midi!`](@ref) turns a
+refusal into an error.
+"""
+lv2_in_midi(dep, port, frame, b0, b1 = NaN, b2 = NaN) =
+    ccall(
+    (:lv2_in_midi, LV2_LIB), Cdouble,
+    (Cdouble, Cdouble, Cdouble, Cdouble, Cdouble, Cdouble),
+    dep, port, frame, b0, b1, b2
+)
 """
     AudioPlugins.lv2_out_sample(dep, i, ch) -> Float64
 
