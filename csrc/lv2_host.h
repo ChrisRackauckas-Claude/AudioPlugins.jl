@@ -25,8 +25,8 @@
  * Atom ports are connected to one sequence buffer each, sized from the
  * port's declared rsz:minimumSize (LV2_HOST_ATOM_BUF when undeclared):
  * MIDI events reach an input sequence through lv2_in_midi, and an output
- * sequence is re-headed to its full capacity before every run(). A plugin
- * that requires a CV or event port, an atom port of another buffer type,
+ * port is re-headed to an atom:Chunk of full capacity before every run().
+ * A plugin that requires a CV or event port, an atom port of another buffer type,
  * or a host feature this host does not offer, is refused at open with a
  * message that says which. Refusing is the honest answer: an unconnected
  * required port is undefined behaviour in the LV2 spec.
@@ -69,13 +69,16 @@ const char *lv2_host_scan_name(long i);
 /* Instantiate and activate the plugin `uri` found under `lv2_path` (same
  * meaning as in lv2_host_scan; pass "" for the first plugin found).
  * `block_size` is the exact number of frames every process() call will
- * carry. `channels` is the number of host audio channels: the k-th audio
- * input port receives host channel min(k, channels-1) (so a mono host
- * feeds every input of a stereo plugin), and the k-th audio output port
- * writes host channel k, or is discarded when k >= channels. When the
- * plugin has fewer audio outputs than `channels`, the last output repeats
- * on the remaining channels (a mono plugin is centre-panned); a plugin
- * with no audio ports at all is silent, which is the shape of a MIDI tool.
+ * carry. `channels` is the number of host audio channels. The rule, for
+ * inputs and outputs alike, is never to drop a channel: the k-th audio
+ * input port receives host channel min(k, channels-1), so a mono host
+ * feeds every input of a stereo plugin, but a plugin with fewer audio
+ * inputs than `channels` is refused rather than leave a host channel
+ * connected to nothing. The k-th audio output port writes host channel k,
+ * or is discarded when k >= channels; when the plugin has fewer audio
+ * outputs than `channels`, the last output repeats on the remaining
+ * channels (a mono plugin is centre-panned); a plugin with no audio ports
+ * at all is silent, which is the shape of a MIDI tool.
  * Returns 0 on success, non-zero on failure (see lv2_host_last_error). */
 int lv2_host_open(const char *lv2_path, const char *uri,
                   double sample_rate, double block_size, double channels);
@@ -117,8 +120,8 @@ double lv2_host_latency(void);
 
 /* ------------------------------------------------------------------ *
  * Atom ports. Each atom:AtomPort is connected to one atom:Sequence
- * buffer; the functions below enumerate them (in scan order, not port
- * order) so a caller can find which port index carries MIDI.
+ * buffer; the functions below enumerate them in port order so a caller
+ * can find which port index carries MIDI.
  * ------------------------------------------------------------------ */
 
 /* Number of atom ports the open plugin has (0 when none or nothing open). */
@@ -127,10 +130,9 @@ double lv2_host_n_atom_ports(void);
 double lv2_host_atom_port_index(double i);
 /* 1.0 when the i-th atom port is an input, 0.0 when an output. */
 double lv2_host_atom_port_is_input(double i);
-/* 1.0 when the i-th atom port may carry midi:MidiEvent: either it declares
- * atom:supports midi:MidiEvent, or it declares no atom:supports at all.
- * 0.0 when it declares supports that exclude MidiEvent -- lv2_in_midi
- * refuses such a port. */
+/* 1.0 when the i-th atom port declares atom:supports midi:MidiEvent --
+ * the only ports lv2_in_midi will write. 0.0 otherwise, including a port
+ * that declares no atom:supports at all: undeclared does not mean MIDI. */
 double lv2_host_atom_port_midi(double i);
 /* Bytes of sequence buffer connected to the i-th atom port: the declared
  * rsz:minimumSize, or LV2_HOST_ATOM_BUF when undeclared. */
@@ -159,17 +161,21 @@ double lv2_in_tone(double t, double waveform, double freq, double amp);
 double lv2_in_sample(double dep, double i, double ch);
 
 /* Append one MIDI event to the input atom:Sequence of atom input port
- * `port`, at `frame` samples into the current block (0-based, so
- * sample-accurate). `b0` is the first (status) byte; `b1` and `b2` are the
- * following bytes, a negative value or NaN marking the message shorter.
+ * `port`, at `frame` samples into the block `dep` names (0-based, so
+ * sample-accurate). `b0` is the status byte (0x80..0xFF); `b1` and `b2`
+ * are the data bytes that follow (0x00..0x7F), a negative value or NaN
+ * marking the message shorter -- a byte after such a marker is an error.
  * Events must be queued in non-decreasing frame order -- LV2 requires a
  * sorted sequence -- between the fill that arms a block and the
- * lv2_process that runs it. Returns the number of events in that port's
- * sequence for this block, or NaN with a message in lv2_host_last_error:
- * no open plugin, no armed block, `port` not an atom input, the port not
- * accepting MidiEvent, `frame` outside the block or out of order, or the
- * sequence buffer full. */
-double lv2_in_midi(double port, double frame, double b0, double b1, double b2);
+ * lv2_process that runs it. Returns `dep` on success, so queued events
+ * chain into lv2_process the way clp_set chains into clp_process, and NaN
+ * with a message in lv2_host_last_error: no open plugin, `dep` not naming
+ * an armed block, `port` not a MIDI-declared atom input, `frame` outside
+ * the block or out of order, a malformed byte, or the sequence buffer
+ * full. A refused event also poisons the block: the next lv2_process
+ * refuses rather than run without it. */
+double lv2_in_midi(double dep, double port, double frame,
+                   double b0, double b1, double b2);
 
 #define LV2_WAVE_SILENCE 0
 #define LV2_WAVE_SINE    1
@@ -186,8 +192,10 @@ double lv2_in_midi(double port, double frame, double b0, double b1, double b2);
  * control input ports for this block; a negative index means the slot is
  * unused, a NaN value leaves the port as it was. A control port is a
  * single float the plugin reads at run(), so a change lands on exactly
- * the block it is passed with. Returns NaN when nothing is open or when
- * `dep` does not name the current input block. */
+ * the block it is passed with. The block is consumed: a second call on
+ * the same `dep` refuses. Returns NaN when nothing is open, when `dep`
+ * does not name the armed input block, or when the block carries a
+ * refused MIDI event. */
 double lv2_process(double dep,
                    double id0, double v0, double id1, double v1,
                    double id2, double v2, double id3, double v3);
