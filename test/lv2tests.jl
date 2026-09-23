@@ -10,9 +10,12 @@ const AP = AudioPlugins
 
 const LV2_DIR = lv2_test_bundle()               # directory containing ap_test.lv2
 const LV2_PATH = lv2_default_path(LV2_DIR)       # + the spec bundles from lv2_jll
+const LV2_MIDI_DIR = lv2_midi_test_bundle()      # directory containing ap_midi.lv2
+const LV2_MIDI_PATH = lv2_default_path(LV2_MIDI_DIR)
 const GAIN = "urn:audioplugins:test:gain"
 const POLE = "urn:audioplugins:test:onepole"
 const LOOK = "urn:audioplugins:test:lookahead"
+const NG = "urn:audioplugins:test:notegain"
 
 @testset "AudioPlugins / LV2" begin
 
@@ -45,12 +48,19 @@ const LOOK = "urn:audioplugins:test:lookahead"
         @test occursin("urn:no:such", lv2_last_error())
         @test_throws ErrorException lv2_open!(LV2_PATH; uri = GAIN, block_size = 99999)
         @test_throws ErrorException lv2_open!(LV2_PATH; uri = GAIN, block_size = 64, channels = 7)
-        # Two host channels into a plugin with one audio output is refused,
-        # naming the port count, rather than leaving a channel silent.
-        @test_throws ErrorException lv2_open!(LV2_PATH; uri = GAIN, block_size = 64, channels = 2)
-        @test occursin("audio output", lv2_last_error())
         @test_throws ErrorException lv2_open!(LV2_PATH; uri = GAIN, sample_rate = -1, block_size = 64)
         @test !lv2_is_open()
+    end
+
+    @testset "fewer audio outputs than channels repeats the last one" begin
+        # Two host channels into a plugin with one audio output opens; the
+        # single output is repeated on both channels (centre-panned).
+        lv2_open!(LV2_PATH; uri = GAIN, block_size = 64, channels = 2)
+        @test lv2_is_open() && lv2_channels() == 2
+        o = AP.lv2_process(lv2_fill!(ones(64)), 0, 2.0, -1, 0, -1, 0, -1, 0)
+        @test lv2_out(o; channel = 0) ≈ fill(2.0, 64)
+        @test lv2_out(o; channel = 1) ≈ fill(2.0, 64)
+        lv2_close!()
     end
 
     @testset "open reports the configuration actually in force" begin
@@ -164,6 +174,55 @@ const LOOK = "urn:audioplugins:test:lookahead"
         lv2_close!()
         @test !lv2_is_open()
         @test isnan(AP.lv2_process(1.0, 0, 1.0, -1, 0, -1, 0, -1, 0))
+    end
+
+    @testset "atom ports are discovered, sized and typed" begin
+        lv2_open!(LV2_MIDI_PATH; uri = NG, block_size = 64)
+        @test lv2_is_open()
+        ports = lv2_atom_ports()
+        @test length(ports) == 3
+        @test (ports[1].index, ports[1].input, ports[1].midi) == (0, true, true)
+        @test (ports[2].index, ports[2].input, ports[2].midi) == (1, false, true)
+        @test (ports[3].index, ports[3].input, ports[3].midi) == (5, true, false)
+        @test ports[1].size == 16384     # rsz:minimumSize honoured
+        @test ports[2].size == 8192      # undeclared gets the host floor
+        @test lv2_param_count() == 0     # a control output is not a parameter
+        # No input block armed yet: queueing an event is an error.
+        @test_throws ErrorException lv2_midi!(0, 0, 0x90, 60, 100)
+    end
+
+    @testset "MIDI events gate the output sample-exactly" begin
+        # Note-on at frame 16 opens the gate at velocity 127/127 == 1.0;
+        # a control change at 32 rides along and is echoed but changes
+        # nothing.
+        t = lv2_fill!(ones(64))
+        lv2_midi!(0, 16, 0x90, 60, 127)
+        lv2_midi!(0, 32, 0xB0, 1, 2)
+        @test_throws ErrorException lv2_midi!(0, 8, 0x90, 60, 100)   # out of order
+        @test_throws ErrorException lv2_midi!(0, 64, 0x90, 60, 100)  # frame >= block
+        @test_throws ErrorException lv2_midi!(2, 0, 0x90, 60, 100)   # an audio port
+        @test_throws ErrorException lv2_midi!(1, 0, 0x90, 60, 100)   # an atom output
+        @test_throws ErrorException lv2_midi!(5, 0, 0x90, 60, 100)   # not MidiEvent
+        o = AP.lv2_process(t, -1, 0, -1, 0, -1, 0, -1, 0)
+        @test lv2_out(o) ≈ [zeros(16); ones(48)]
+        @test lv2_port_value(4) == 2.0     # both events echoed to midi_out
+        @test isnan(lv2_param_value(4))    # a control output is not a parameter
+        @test isnan(lv2_port_value(2))     # an audio port has no port value
+
+        # A block with no events: the gate stays open.
+        o = AP.lv2_process(lv2_fill!(ones(64)), -1, 0, -1, 0, -1, 0, -1, 0)
+        @test lv2_out(o) ≈ ones(64)
+        @test lv2_port_value(4) == 0.0
+
+        # Note-off at frame 0 closes it; a velocity-64 note-on reopens at
+        # gain 64/127.
+        t = lv2_fill!(ones(64)); lv2_midi!(0, 0, 0x80, 60, 0)
+        o = AP.lv2_process(t, -1, 0, -1, 0, -1, 0, -1, 0)
+        @test AP.lv2_out_peak(o) == 0.0
+        t = lv2_fill!(ones(64)); lv2_midi!(0, 0, 0x90, 60, 64)
+        o = AP.lv2_process(t, -1, 0, -1, 0, -1, 0, -1, 0)
+        @test lv2_out(o)[1] ≈ 64 / 127 atol = 1.0e-6
+        lv2_close!()
     end
 
     # Real third-party bundles, when the machine has some: discovery must
