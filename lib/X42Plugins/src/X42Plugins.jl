@@ -50,12 +50,12 @@ export lv2_dir
     lv2_dir() -> String
 
 Absolute path of the directory that contains the fourteen `.lv2` bundles from
-`X42Plugins_jll` (i.e. `…/share/lv2` or `…/lib/lv2`). Pass it to
+`X42Plugins_jll` (i.e. `…/share/lv2`). Pass it to
 [`AudioPlugins.lv2_default_path`](@ref) so lilv also sees the LV2 specification
 bundles from `lv2_jll`.
 """
 function lv2_dir()
-    # balance_lv2 is …/{share,lib}/lv2/balance.lv2/manifest.ttl
+    # balance_lv2 is …/share/lv2/balance.lv2/manifest.ttl
     return dirname(dirname(X42Plugins_jll.balance_lv2))
 end
 

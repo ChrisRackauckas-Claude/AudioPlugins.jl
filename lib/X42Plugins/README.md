@@ -65,5 +65,5 @@ binaries on your machine.
 
 ## What the JLL contains
 
-Fourteen LV2 bundles under `share/lv2/` (or `lib/lv2/` on older artifacts),
-built headless. The recipe is `X/X42Plugins` in Yggdrasil.
+Fourteen LV2 bundles under `share/lv2/`, built headless. The recipe is
+`X/X42Plugins` in Yggdrasil.
