@@ -1,7 +1,8 @@
-/* midi_echo_probe.c -- load an LV2 .so/.dylib/.dll by path, send one note-on,
- * count MIDI events on the atom output. Exit 0 when exactly one matching
- * note-on is forged. Asserts midifilter#passthru actually echoes (LV2Host 1.2
- * does not decode atom outputs).
+/* midi_echo_probe.c -- load midifilter#passthru's .so/.dylib/.dll by path,
+ * send one note-on, count MIDI events on the atom output. Exit 0 when exactly
+ * one matching note-on is forged. Asserts passthru actually echoes (LV2Host
+ * 1.2 does not decode atom outputs). Passthru-only: port wiring assumes the
+ * three-port midiin/midiout/latency layout.
  *
  * Usage: midi_echo_probe <plugin.so> <uri> <midi_in_idx> <midi_out_idx>
  *                        <note> <velocity>
@@ -115,6 +116,9 @@ int main(int argc, char **argv) {
 
     d->connect_port(inst, (uint32_t)midi_in, in_seq);
     d->connect_port(inst, (uint32_t)midi_out, out_buf);
+    /* Passthru-only: ports are midiin, midiout, latency. Connecting every
+     * leftover index to one float is wrong for filters with more controls
+     * (e.g. eventblocker segfaults). */
     for (uint32_t p = 0; p < 8; p++) {
         if ((int)p == midi_in || (int)p == midi_out) continue;
         d->connect_port(inst, p, &latency);

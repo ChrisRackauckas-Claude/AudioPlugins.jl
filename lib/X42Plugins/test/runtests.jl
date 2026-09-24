@@ -69,14 +69,17 @@ const EXPECTED_URIS = [
 
 function _midi_echo_probe()
     src = joinpath(@__DIR__, "midi_echo_probe.c")
-    bin = joinpath(@__DIR__, "midi_echo_probe-$(Sys.ARCH)")
+    # Scratch/temp — never write into the package's own test/ (read-only depot).
+    scratch = mkpath(joinpath(tempdir(), "X42Plugins_midi_echo_$(Sys.ARCH)"))
+    exe = Sys.iswindows() ? ".exe" : ""
+    bin = joinpath(scratch, "midi_echo_probe$(exe)")
     # lib/X42Plugins/test → repo/csrc/vendor
     vendor = normpath(joinpath(@__DIR__, "..", "..", "..", "csrc", "vendor"))
     if !isfile(bin) || stat(src).mtime > stat(bin).mtime
-        cc = Sys.which("cc")
-        cc === nothing && (cc = Sys.which("gcc"))
-        cc === nothing && (cc = Sys.which("clang"))
-        cc === nothing && error("midi_echo_probe needs a C compiler on PATH")
+        cc = AudioPlugins._c_compiler()
+        cc === nothing && error(
+            "midi_echo_probe needs a C compiler on PATH (tried cc, gcc, clang)"
+        )
         link = Sys.iswindows() ? `` : Sys.isapple() ? `` : `-ldl`
         run(`$cc -O2 -Wall -I$vendor -o $bin $src $link`)
     end
