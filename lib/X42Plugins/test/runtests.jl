@@ -67,12 +67,41 @@ const EXPECTED_URIS = [
     "http://gareus.org/oss/lv2/xfade",
 ]
 
+function _midi_echo_probe()
+    src = joinpath(@__DIR__, "midi_echo_probe.c")
+    # Scratch/temp — never write into the package's own test/ (read-only depot).
+    scratch = mkpath(joinpath(tempdir(), "X42Plugins_midi_echo_$(Sys.ARCH)"))
+    exe = Sys.iswindows() ? ".exe" : ""
+    bin = joinpath(scratch, "midi_echo_probe$(exe)")
+    # lib/X42Plugins/test → repo/csrc/vendor
+    vendor = normpath(joinpath(@__DIR__, "..", "..", "..", "csrc", "vendor"))
+    if !isfile(bin) || stat(src).mtime > stat(bin).mtime
+        cc = AudioPlugins._c_compiler()
+        cc === nothing && error(
+            "midi_echo_probe needs a C compiler on PATH (tried cc, gcc, clang)"
+        )
+        link = Sys.iswindows() ? `` : Sys.isapple() ? `` : `-ldl`
+        run(`$cc -O2 -Wall -I$vendor -o $bin $src $link`)
+    end
+    return bin
+end
+
+function _midifilter_binary()
+    # manifest.ttl sits beside midifilter.{so,dll,dylib}
+    dir = dirname(X42Plugins_jll.midifilter_lv2)
+    for name in ("midifilter.so", "midifilter.dylib", "midifilter.dll")
+        p = joinpath(dir, name)
+        isfile(p) && return p
+    end
+    error("midifilter binary not found next to $(X42Plugins_jll.midifilter_lv2)")
+end
+
 @testset "X42Plugins" begin
     path = lv2_default_path(lv2_dir())
 
-    @testset "lv2_dir points at the JLL lib/lv2" begin
+    @testset "lv2_dir points at the JLL lv2 root" begin
         @test isdir(lv2_dir())
-        @test endswith(lv2_dir(), joinpath("lib", "lv2")) || endswith(replace(lv2_dir(), "\\" => "/"), "lib/lv2")
+        @test basename(lv2_dir()) == "lv2"
         @test isfile(X42Plugins_jll.balance_lv2)
         @test dirname(dirname(X42Plugins_jll.balance_lv2)) == lv2_dir()
     end
@@ -98,21 +127,31 @@ const EXPECTED_URIS = [
         lv2_close!()
     end
 
-    @testset "a MIDI filter opens and accepts a note-on" begin
+    @testset "passthru accepts a note-on and echoes it on MIDI out" begin
         uri = "http://gareus.org/oss/lv2/midifilter#passthru"
         lv2_open!(path; uri = uri, sample_rate = 48000, block_size = 64, channels = 1)
         @test lv2_is_open()
         ports = AudioPlugins.lv2_atom_ports()
         midi_in = only(p for p in ports if p.input && p.midi)
+        midi_out = only(p for p in ports if !p.input && p.midi)
+        @test midi_in.index == 0 && midi_out.index == 1
         t = lv2_fill!(zeros(64); channels = 1)
         AudioPlugins.lv2_midi!(t, midi_in.index, 0, 0x90, 60, 100)
         tok = AudioPlugins.lv2_process(t, -1, 0, -1, 0, -1, 0, -1, 0)
         @test length(lv2_out(tok)) == 64
         lv2_close!()
+
+        # LV2Host 1.2 does not decode atom outputs; read the binary directly.
+        probe = _midi_echo_probe()
+        so = _midifilter_binary()
+        out = read(`$probe $so $uri 0 1 60 100`, String)
+        @test occursin("n_midi=1 matched=1", out)
     end
 
     @testset "midimap is refused for lack of worker:schedule" begin
         uri = "http://gareus.org/oss/lv2/midimap"
-        @test_throws ErrorException lv2_open!(path; uri = uri, sample_rate = 48000, block_size = 64, channels = 1)
+        @test_throws r"worker#schedule" lv2_open!(
+            path; uri = uri, sample_rate = 48000, block_size = 64, channels = 1
+        )
     end
 end
