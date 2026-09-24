@@ -9,3 +9,4 @@ Manifest.toml
 docs/build/
 docs/src/assets/Project.toml
 docs/src/assets/Manifest.toml
+lib/X42Plugins/test/midi_echo_probe-*
