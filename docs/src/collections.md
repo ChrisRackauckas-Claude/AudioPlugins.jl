@@ -29,7 +29,7 @@ preference, for the reason given under
 | LSP Plugins — 198 plugins | [lsp-plugins](https://github.com/lsp-plugins/lsp-plugins) | LGPL-3.0-or-later | Shipped: `LSPPlugins_jll` 1.2.35 is registered and `lib/LSPPlugins` is in this repository. **Linux glibc only** (`x86_64` and `i686`), so it does not resolve on macOS or Windows |
 | Dragonfly Reverb | [dragonfly-reverb](https://github.com/michaelwillis/dragonfly-reverb) | GPL-3.0-or-later | Shipped: `DragonflyReverb_jll` 3.2.10 is registered and `lib/DragonflyReverb` is in this repository |
 | ZamPlugins | [zam-plugins](https://github.com/zamaudio/zam-plugins) | GPL-2.0-or-later for the sixteen plugins packaged; the upstream repository is not uniformly so (see below) | Shipped: `ZamPlugins_jll` 4.5.0 is registered and `lib/ZamPlugins` is in this repository |
-| x42-plugins | [x42-plugins](https://github.com/x42/x42-plugins) | GPL-2.0-or-later for the fourteen submodules packaged; the meta-repo is not uniformly so (see below) | Shipped: `X42Plugins_jll` (Yggdrasil branch pending registration) and `lib/X42Plugins` — 54 headless LV2 plugins. LV2 collections are not `register_bundle!`'d; use `lv2_default_path(X42Plugins.lv2_dir())` |
+| x42-plugins | [x42-plugins](https://github.com/x42/x42-plugins) | GPL-2.0-or-later for the fourteen submodules packaged; the meta-repo is not uniformly so (see below) | Shipped: `X42Plugins_jll` and `lib/X42Plugins` — 54 headless LV2 plugins. LV2 collections are not `register_bundle!`'d; use `lv2_default_path(X42Plugins.lv2_dir())` |
 
 "Proposed" means exactly that: no recipe, no JLL, no sublibrary, and no commitment that
 one is coming. It is the list from
@@ -55,10 +55,12 @@ Three entries in issue #39's own table do not match what upstream declares, and 
 corrected above rather than propagated. lsp-plugins is LGPL-3.0-or-later (its README
 says "GNU Lesser Public License v3"), not GPLv3. x42-plugins declares no
 repository-level licence at all, being a meta-repository of per-plugin submodules: at
-pin `3fb6abe`, 20 of its 25 submodules are GPL-2.0-or-later throughout while 5 contain
-GPL-3.0-or-later code (plus darc/dpl ship a GPLv3 `COPYING`), so no single label is
-correct for the whole meta-repo. What is packaged here is the fourteen headless
-GPL-2.0-or-later submodules only — see the X42Plugins section below. And zam-plugins is
+pin `3fb6abe`, fourteen headless submodules are GPL-2.0-or-later throughout (what is
+packaged here); five contain GPL-3.0-or-later source (dpl, fat1, meters, sisco,
+zconvo); darc's sources are GPL-2.0-or-later but its `COPYING` is GPLv3, so it is
+excluded on that basis; and four more are GPL-2.0-or-later but not headless (fil4,
+tuna, spectra, mixtri). No single label is correct for the whole meta-repo — see the
+X42Plugins section below. And zam-plugins is
 GPL-2.0-or-later only for what is packaged here: `ZamVerb` and `ZamHeadX2` link a
 bundled zita-convolver 4.0.0 which is GPL-3.0-or-later, so both are deliberately
 excluded from the JLL to keep the single label true rather than approximate.
@@ -85,11 +87,12 @@ lv2_open!(path; uri = "http://gareus.org/oss/lv2/nodelay",
 needs `worker:schedule`, which this host does not provide — it is in the artifact
 and enumerated by `lv2_scan`, but `lv2_open!` refuses it (53 of 54 open).
 
-Not packaged: the GPL-3.0-or-later trees (darc, dpl, fat1, meters, sisco, zconvo —
-meters/sisco also need cairo/OpenGL) and the GPL-2.0-or-later plugins that do not
-build headless (fil4, tuna, spectra, mixtri). A separate GPL-3.0-or-later JLL was
-considered and rejected: only four of those submodules build headless, which is too
-thin next to this collection.
+Not packaged: dpl, fat1, meters, sisco, zconvo (GPL-3.0-or-later source; meters and
+sisco also need cairo/OpenGL); darc (sources are GPL-2.0-or-later, but its `COPYING`
+is GPLv3); and the GPL-2.0-or-later plugins that do not build headless (fil4, tuna,
+spectra, mixtri). dpl (limiter), fat1 (autotune), darc (compressor) and zconvo
+(convolver) build headless and are useful; they are not packaged here. A separate
+JLL for them is a possible follow-up.
 
 ### Airwindows
 

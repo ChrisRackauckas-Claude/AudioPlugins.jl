@@ -42,5 +42,7 @@ meta-repo at pin `3fb6abe` and each submodule's own `COPYING` / source headers:
 | balance, controlfilter, matrixmixer, mididebug, midifilter, midigen, midimap, nodelay, onsettrigger, phaserotate, stepseq, stereoroute, testsignal, xfade | GPL-2.0-or-later | each `COPYING` is the GPLv2 text; headers say "either version 2 … or (at your option) any later version"; no GPL-3 source files in those trees |
 | `FFTW_jll` (runtime, `phaserotate` only) | GPL-2.0-or-later | FFTW's own licence |
 
-Not in this artifact (GPL-3.0-or-later code and/or not headless-buildable): darc, dpl,
-fat1, meters, sisco, zconvo, fil4, tuna, spectra, mixtri. See the README.
+Not in this artifact: dpl, fat1, meters, sisco, zconvo (GPL-3.0-or-later source);
+darc (sources are GPL-2.0-or-later, but its `COPYING` is the GPLv3 text, so it is
+excluded on that basis); fil4, tuna, spectra, mixtri (GPL-2.0-or-later but not
+headless-buildable). See the README.
