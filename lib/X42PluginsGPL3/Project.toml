@@ -1,0 +1,23 @@
+name = "X42PluginsGPL3"
+uuid = "49cf472b-c535-4f2f-acfd-db2acdac01da"
+authors = ["JuliaHub, Inc. and contributors"]
+version = "1.0.0"
+
+[deps]
+AudioPlugins = "83119930-5344-4127-8689-15f5870d6d1a"
+X42PluginsGPL3_jll = "a74ade67-7ba8-5f91-a46f-f22f80ba4cb0"
+
+[sources]
+AudioPlugins = {path = "../.."}
+
+[compat]
+AudioPlugins = "1.5"
+X42PluginsGPL3_jll = "2025.6"
+Test = "1"
+julia = "1.10"
+
+[extras]
+Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
+
+[targets]
+test = ["Test"]
