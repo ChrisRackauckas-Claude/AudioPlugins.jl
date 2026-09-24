@@ -11,7 +11,11 @@ on:
   pull_request:
 jobs:
   probe:
-    runs-on: ubuntu-latest
+    # The LV2 step runs under LeakSanitizer, whose exit-time stop-the-world
+    # (ptrace) aborts with a fatal error on the SciML self-hosted pool. That
+    # pool takes only the `ubuntu-latest` label; `ubuntu-24.04` is served by
+    # GitHub-hosted runners, where LSan runs.
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
       - name: Install lilv (for the LV2 host) and the LV2 example plugins
