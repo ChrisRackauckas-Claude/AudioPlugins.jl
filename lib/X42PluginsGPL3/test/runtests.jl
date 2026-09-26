@@ -55,7 +55,7 @@ const EXPECTED_URIS = sort!([first.(OPENABLE); ZCONVO])
         lv2_open!(path; uri = uri, sample_rate = sr, block_size = n, channels = ch)
         @test lv2_is_open()
         @test lv2_plugin_uri() == uri
-        peak = 0.0
+        peaks = zeros(ch)
         for b in 0:(nblocks - 1)
             x = [
                 0.5 * sin(2pi * 440 * (b * n + i) / sr) for i in 0:(n - 1) for _ in 1:ch
@@ -67,10 +67,12 @@ const EXPECTED_URIS = sort!([first.(OPENABLE); ZCONVO])
                 y = lv2_out(tok; channel = c)
                 @test length(y) == n
                 @test all(isfinite, y)
-                peak = max(peak, maximum(abs, y))
+                peaks[c + 1] = max(peaks[c + 1], maximum(abs, y))
             end
         end
-        @test peak > 0.01
+        for peak in peaks
+            @test peak > 0.01
+        end
         lv2_close!()
     end
 
