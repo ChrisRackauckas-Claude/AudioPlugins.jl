@@ -4,8 +4,9 @@
 Robin Gareus' [x42-plugins](https://github.com/x42/x42-plugins) — fourteen LV2
 bundles, 54 plugins — as a collection for
 [AudioPlugins](https://github.com/SciML/AudioPlugins.jl). LV2 collections are
-not registered with [`register_bundle!`](@ref) (that API is CLAP-only); point
-[`lv2_default_path`](@ref) / [`lv2_scan`](@ref) at [`lv2_dir`](@ref) instead:
+not registered with [`AudioPlugins.register_bundle!`](@ref) (that API is
+CLAP-only); point [`AudioPlugins.lv2_default_path`](@ref) /
+[`AudioPlugins.lv2_scan`](@ref) at [`lv2_dir`](@ref) instead:
 
 ```julia
 using AudioPlugins, X42Plugins
@@ -35,7 +36,8 @@ lv2_open!(path; uri = "http://gareus.org/oss/lv2/nodelay",
 
 `phaserotate` links `libfftw3f` (from `FFTW_jll`, a dependency of the artifact).
 `midimap` needs `worker:schedule`, which this host does not provide — it is in
-the artifact and `lv2_scan` lists it, but [`lv2_open!`](@ref) refuses it.
+the artifact and `lv2_scan` lists it, but [`AudioPlugins.lv2_open!`](@ref)
+refuses it.
 
 Third-party binary code runs in your process: a plugin that crashes takes Julia with it.
 See AudioPlugins' "Known limits".
