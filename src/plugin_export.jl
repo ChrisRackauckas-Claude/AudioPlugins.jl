@@ -601,14 +601,18 @@ directly) of a `.pc` file, with `\${var}` references expanded from
 pkg-config's built-ins (`pcfiledir`, `pc_sysrootdir`, `pc_top_builddir`)
 and the file's own definitions. Reading the file directly avoids requiring
 the `pkg-config` binary, which a machine with a C compiler need not have.
-A flag that expands to a bare `-I` or `-L` is refused: those option letters
-swallow the next compiler argument and corrupt the link line.
+An undefined `\${var}` is an error (as in pkg-config). A bare `-I` or `-L`
+with no following path argument is refused: those option letters would
+swallow the next compiler argument and corrupt the link line. The detached
+form `-I /path` / `-L /path` is kept as two tokens, matching `cc`.
 """
 function pkgconfig_flags(path::AbstractString)
     # pkg-config predefines these before reading the file; see pkg-config(1).
+    # pc_sysrootdir is always "/": this reader does not emulate
+    # PKG_CONFIG_SYSROOT_DIR's rewrite of every -I/-L path.
     vars = Dict{String, String}(
         "pcfiledir" => dirname(abspath(path)),
-        "pc_sysrootdir" => get(ENV, "PKG_CONFIG_SYSROOT_DIR", "/"),
+        "pc_sysrootdir" => "/",
         "pc_top_builddir" => get(ENV, "PKG_CONFIG_TOP_BUILD_DIR", "\$(top_builddir)"),
     )
     fields = Dict{String, String}()
@@ -619,9 +623,9 @@ function pkgconfig_flags(path::AbstractString)
         m === nothing && continue
         name, sep, value = m.captures
         if sep == "="
-            vars[name] = _expand_pc(value, vars)
+            vars[name] = _expand_pc(value, vars, path)
         else
-            fields[name] = _expand_pc(value, vars)
+            fields[name] = _expand_pc(value, vars, path)
         end
     end
     cflags = Base.shell_split(get(fields, "Cflags", ""))
@@ -634,16 +638,31 @@ function pkgconfig_flags(path::AbstractString)
     return (; cflags, libs)
 end
 
-_expand_pc(s, vars) = replace(s, r"\$\{([A-Za-z0-9_.]+)\}" => m -> get(vars, m[3:(end - 1)], ""))
+function _expand_pc(s, vars, path)
+    return replace(
+        s,
+        r"\$\{([A-Za-z0-9_.]+)\}" => m -> begin
+            name = m[3:(end - 1)]
+            haskey(vars, name) ||
+                throw(ArgumentError("Variable '$name' not defined in '$path'"))
+            vars[name]
+        end
+    )
+end
 
 function _refuse_bare_pc_flags(path, flags)
-    for flag in flags
+    for i in eachindex(flags)
+        flag = flags[i]
         if flag == "-I" || flag == "-L"
-            throw(
-                ArgumentError(
-                    "$path: flag $(repr(flag)) has an empty argument after variable expansion"
+            # Detached `-I path` / `-L path` is valid for cc; refuse only when
+            # there is no following path or the next token looks like an option.
+            if i == lastindex(flags) || startswith(flags[i + 1], "-")
+                throw(
+                    ArgumentError(
+                        "$path: bare $(repr(flag)) has no path argument"
+                    )
                 )
-            )
+            end
         end
     end
     return
