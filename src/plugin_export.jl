@@ -456,12 +456,18 @@ function PluginSpec(;
     if sample_rate_field !== nothing
         srf = String(sample_rate_field)
         for p in params
-            p.field == srf && throw(ArgumentError(
-                "sample_rate_field $(repr(srf)) must not also be a parameter field"))
+            p.field == srf && throw(
+                ArgumentError(
+                    "sample_rate_field $(repr(srf)) must not also be a parameter field"
+                )
+            )
         end
         for (k, _) in consts
-            k == srf && throw(ArgumentError(
-                "sample_rate_field $(repr(srf)) must not also be a constant field"))
+            k == srf && throw(
+                ArgumentError(
+                    "sample_rate_field $(repr(srf)) must not also be a constant field"
+                )
+            )
         end
     end
     return PluginSpec(
