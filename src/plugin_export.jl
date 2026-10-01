@@ -382,7 +382,8 @@ Optional:
     presence flag, and on a sample where it is false the wrapper holds the
     last present value per channel (zero until the first). Default `false`;
   * `sample_rate_field` — a field of the parameter struct to write the
-    host's sample rate into on activate, so one bundle serves every rate;
+    host's sample rate into on activate, so one bundle serves every rate.
+    Must not also be a parameter or constant field (those would overwrite it);
   * `params` — [`PluginParam`](@ref)s;
   * `constants` — `field => value` pairs written into the parameter struct
     once at instantiation, for fields that are not plugin parameters.
@@ -451,6 +452,17 @@ function PluginSpec(;
         _check_c_ident(k, "constant field")
         v isa Union{Bool, Integer, AbstractFloat} ||
             throw(ArgumentError("constant $k must be a Bool, Integer or Float, got $(typeof(v))"))
+    end
+    if sample_rate_field !== nothing
+        srf = String(sample_rate_field)
+        for p in params
+            p.field == srf && throw(ArgumentError(
+                "sample_rate_field $(repr(srf)) must not also be a parameter field"))
+        end
+        for (k, _) in consts
+            k == srf && throw(ArgumentError(
+                "sample_rate_field $(repr(srf)) must not also be a constant field"))
+        end
     end
     return PluginSpec(
         String(id), String(name), String(vendor), String(version),
