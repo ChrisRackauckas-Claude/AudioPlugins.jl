@@ -628,10 +628,10 @@ function pkgconfig_flags(path::AbstractString)
             fields[name] = _expand_pc(value, vars, path)
         end
     end
-    cflags = _pc_shell_split(get(fields, "Cflags", ""))
+    cflags = _pc_shell_split(get(fields, "Cflags", ""), path)
     libs = vcat(
-        _pc_shell_split(get(fields, "Libs", "")),
-        _pc_shell_split(get(fields, "Libs.private", ""))
+        _pc_shell_split(get(fields, "Libs", ""), path),
+        _pc_shell_split(get(fields, "Libs.private", ""), path)
     )
     _refuse_bare_pc_flags(path, cflags)
     _refuse_bare_pc_flags(path, libs)
@@ -650,19 +650,41 @@ function _expand_pc(s, vars, path)
     )
 end
 
+# Characters that `\` escapes outside quotes and inside double quotes (glib
+# g_shell_parse_argv / Bourne). A `\` before any other character is kept, so
+# Windows paths like C:\Users\me survive.
+_pc_shell_escape_next(c) =
+    isspace(c) || c == '\'' || c == '"' || c == '\\' || c == '$' || c == '`'
+
 """
-Split a `.pc` `Cflags`/`Libs` line on whitespace, honouring quotes, without
-treating `\\` as an escape. `Base.shell_split` uses Bourne rules and would
-delete the separators in a Windows `\${pcfiledir}` path (`C:\\Users\\...`
-becomes `C:Users...`), which is what broke Windows CI for relocatable `.pc`
-files.
+    _pc_shell_split(s, path) -> Vector{String}
+
+Split a `.pc` `Cflags`/`Libs` line into arguments: whitespace separates
+tokens; single and double quotes group text (including empty `""`); a
+backslash escapes the next character when that character is whitespace,
+`'`, `"`, `\\`, `\$`, or backtick — outside quotes and inside double
+quotes — and is kept literally otherwise and inside single quotes.
+Unclosed quotes throw `ArgumentError` naming `path`.
 """
-function _pc_shell_split(s::AbstractString)
+function _pc_shell_split(s::AbstractString, path::AbstractString)
     out = String[]
     buf = IOBuffer()
     in_single = false
     in_double = false
-    for c in s
+    # True once a token has started, including an empty quoted `""`.
+    started = false
+
+    function flush_token!()
+        if started
+            push!(out, String(take!(buf)))
+            started = false
+        end
+        return
+    end
+
+    i = firstindex(s)
+    while i <= lastindex(s)
+        c = s[i]
         if in_single
             if c == '\''
                 in_single = false
@@ -670,26 +692,64 @@ function _pc_shell_split(s::AbstractString)
                 write(buf, c)
             end
         elseif in_double
-            if c == '"'
+            if c == '\\'
+                j = nextind(s, i)
+                if j <= lastindex(s)
+                    n = s[j]
+                    if n == '\n'
+                        # backslash-newline: line continuation
+                        i = j
+                    elseif _pc_shell_escape_next(n)
+                        write(buf, n)
+                        i = j
+                    else
+                        write(buf, c)
+                    end
+                else
+                    write(buf, c)
+                end
+            elseif c == '"'
                 in_double = false
             else
                 write(buf, c)
             end
+        elseif c == '\\'
+            j = nextind(s, i)
+            if j <= lastindex(s)
+                n = s[j]
+                if n == '\n'
+                    i = j
+                elseif _pc_shell_escape_next(n)
+                    write(buf, n)
+                    started = true
+                    i = j
+                else
+                    write(buf, c)
+                    started = true
+                end
+            else
+                write(buf, c)
+                started = true
+            end
         elseif c == '\''
             in_single = true
+            started = true
         elseif c == '"'
             in_double = true
+            started = true
         elseif isspace(c)
-            if buf.size > 0
-                push!(out, String(take!(buf)))
-            end
+            flush_token!()
         else
             write(buf, c)
+            started = true
         end
+        i = nextind(s, i)
     end
-    if buf.size > 0
-        push!(out, String(take!(buf)))
+    if in_single || in_double
+        kind = in_single ? "single" : "double"
+        throw(ArgumentError("$path: unterminated $kind quote in .pc flag line"))
     end
+    flush_token!()
     return out
 end
 
