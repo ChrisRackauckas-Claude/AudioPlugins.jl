@@ -628,10 +628,10 @@ function pkgconfig_flags(path::AbstractString)
             fields[name] = _expand_pc(value, vars, path)
         end
     end
-    cflags = Base.shell_split(get(fields, "Cflags", ""))
+    cflags = _pc_shell_split(get(fields, "Cflags", ""))
     libs = vcat(
-        Base.shell_split(get(fields, "Libs", "")),
-        Base.shell_split(get(fields, "Libs.private", ""))
+        _pc_shell_split(get(fields, "Libs", "")),
+        _pc_shell_split(get(fields, "Libs.private", ""))
     )
     _refuse_bare_pc_flags(path, cflags)
     _refuse_bare_pc_flags(path, libs)
@@ -648,6 +648,49 @@ function _expand_pc(s, vars, path)
             vars[name]
         end
     )
+end
+
+"""
+Split a `.pc` `Cflags`/`Libs` line on whitespace, honouring quotes, without
+treating `\\` as an escape. `Base.shell_split` uses Bourne rules and would
+delete the separators in a Windows `\${pcfiledir}` path (`C:\\Users\\...`
+becomes `C:Users...`), which is what broke Windows CI for relocatable `.pc`
+files.
+"""
+function _pc_shell_split(s::AbstractString)
+    out = String[]
+    buf = IOBuffer()
+    in_single = false
+    in_double = false
+    for c in s
+        if in_single
+            if c == '\''
+                in_single = false
+            else
+                write(buf, c)
+            end
+        elseif in_double
+            if c == '"'
+                in_double = false
+            else
+                write(buf, c)
+            end
+        elseif c == '\''
+            in_single = true
+        elseif c == '"'
+            in_double = true
+        elseif isspace(c)
+            if buf.size > 0
+                push!(out, String(take!(buf)))
+            end
+        else
+            write(buf, c)
+        end
+    end
+    if buf.size > 0
+        push!(out, String(take!(buf)))
+    end
+    return out
 end
 
 function _refuse_bare_pc_flags(path, flags)
