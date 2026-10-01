@@ -120,6 +120,44 @@ end
         end
     end
 
+    @testset "relocatable .pc expands \${pcfiledir}" begin
+        mktempdir() do d
+            pc = joinpath(d, "g.pc")
+            write(
+                pc, """
+                prefix=\${pcfiledir}
+
+                Name: g
+                Description: relocatable step
+                Version: 0
+                Cflags: -I\${prefix}
+                Libs: -lm
+                """
+            )
+            f = AP.pkgconfig_flags(pc)
+            @test f.cflags == ["-I$(abspath(d))"]
+            @test f.libs == ["-lm"]
+        end
+    end
+
+    @testset "bare -I/-L after expansion is refused" begin
+        mktempdir() do d
+            pc = joinpath(d, "bad.pc")
+            write(
+                pc, """
+                empty=
+                Name: bad
+                Cflags: -I\${empty}
+                Libs: -lm
+                """
+            )
+            err = @test_throws ArgumentError AP.pkgconfig_flags(pc)
+            msg = sprint(showerror, err.value)
+            @test occursin(pc, msg)
+            @test occursin("-I", msg)
+        end
+    end
+
     @testset "the rendered wrapper" begin
         mktempdir() do d
             w = AP.emit_wrapper(CLAP(), gain_spec, d)
