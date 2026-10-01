@@ -597,12 +597,20 @@ end
     pkgconfig_flags(path) -> (; cflags::Vector{String}, libs::Vector{String})
 
 The `Cflags` and `Libs` (plus `Libs.private`, since the object is linked
-directly) of a `.pc` file, with `\${var}` references expanded from the
-file's own definitions. Reading the file directly avoids requiring the
-`pkg-config` binary, which a machine with a C compiler need not have.
+directly) of a `.pc` file, with `\${var}` references expanded from
+pkg-config's built-ins (`pcfiledir`, `pc_sysrootdir`, `pc_top_builddir`)
+and the file's own definitions. Reading the file directly avoids requiring
+the `pkg-config` binary, which a machine with a C compiler need not have.
+A flag that expands to a bare `-I` or `-L` is refused: those option letters
+swallow the next compiler argument and corrupt the link line.
 """
 function pkgconfig_flags(path::AbstractString)
-    vars = Dict{String, String}()
+    # pkg-config predefines these before reading the file; see pkg-config(1).
+    vars = Dict{String, String}(
+        "pcfiledir" => dirname(abspath(path)),
+        "pc_sysrootdir" => get(ENV, "PKG_CONFIG_SYSROOT_DIR", "/"),
+        "pc_top_builddir" => get(ENV, "PKG_CONFIG_TOP_BUILD_DIR", "\$(top_builddir)"),
+    )
     fields = Dict{String, String}()
     for raw in eachline(path)
         line = strip(first(split(raw, '#'; limit = 2)))
@@ -616,14 +624,30 @@ function pkgconfig_flags(path::AbstractString)
             fields[name] = _expand_pc(value, vars)
         end
     end
+    cflags = Base.shell_split(get(fields, "Cflags", ""))
     libs = vcat(
         Base.shell_split(get(fields, "Libs", "")),
         Base.shell_split(get(fields, "Libs.private", ""))
     )
-    return (; cflags = Base.shell_split(get(fields, "Cflags", "")), libs)
+    _refuse_bare_pc_flags(path, cflags)
+    _refuse_bare_pc_flags(path, libs)
+    return (; cflags, libs)
 end
 
 _expand_pc(s, vars) = replace(s, r"\$\{([A-Za-z0-9_.]+)\}" => m -> get(vars, m[3:(end - 1)], ""))
+
+function _refuse_bare_pc_flags(path, flags)
+    for flag in flags
+        if flag == "-I" || flag == "-L"
+            throw(
+                ArgumentError(
+                    "$path: flag $(repr(flag)) has an empty argument after variable expansion"
+                )
+            )
+        end
+    end
+    return
+end
 
 # ---------------------------------------------------------------------------
 # A Julia step's C view: the header juliac does not write
