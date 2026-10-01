@@ -140,6 +140,26 @@ end
         end
     end
 
+    @testset "Windows-style backslash paths survive flag splitting" begin
+        # CI failure on windows-latest: ${pcfiledir} is C:\Users\... and
+        # Base.shell_split ate every \, yielding -IC:Users.... Reproduce with
+        # a literal Windows-style prefix on any OS.
+        mktempdir() do d
+            pc = joinpath(d, "win.pc")
+            write(
+                pc, """
+                prefix=C:\\Users\\me\\proj
+                Name: win
+                Cflags: -I\${prefix}\\include
+                Libs: -L\${prefix}\\lib -lm
+                """
+            )
+            f = AP.pkgconfig_flags(pc)
+            @test f.cflags == ["-IC:\\Users\\me\\proj\\include"]
+            @test f.libs == ["-LC:\\Users\\me\\proj\\lib", "-lm"]
+        end
+    end
+
     @testset "detached -I/-L path form is kept" begin
         mktempdir() do d
             pc = joinpath(d, "detached.pc")
