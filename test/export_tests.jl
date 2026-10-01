@@ -141,9 +141,8 @@ end
     end
 
     @testset "Windows-style backslash paths survive flag splitting" begin
-        # CI failure on windows-latest: ${pcfiledir} is C:\Users\... and
-        # Base.shell_split ate every \, yielding -IC:Users.... Reproduce with
-        # a literal Windows-style prefix on any OS.
+        # A `\` before a non-metacharacter is literal, so Windows-style
+        # prefixes keep their separators through flag splitting.
         mktempdir() do d
             pc = joinpath(d, "win.pc")
             write(
@@ -157,6 +156,60 @@ end
             f = AP.pkgconfig_flags(pc)
             @test f.cflags == ["-IC:\\Users\\me\\proj\\include"]
             @test f.libs == ["-LC:\\Users\\me\\proj\\lib", "-lm"]
+        end
+    end
+
+    @testset "backslash escapes whitespace and quotes in .pc flags" begin
+        mktempdir() do d
+            pc = joinpath(d, "esc.pc")
+            write(
+                pc, """
+                Name: esc
+                Cflags: -DX=a\\ b -DFOO=\\"bar\\" -I/opt/my\\ dir/include -D"a\\\\b" -D"foo\\"bar"
+                Libs: -lm
+                """
+            )
+            f = AP.pkgconfig_flags(pc)
+            @test f.cflags == [
+                "-DX=a b",
+                "-DFOO=\"bar\"",
+                "-I/opt/my dir/include",
+                "-Da\\b",
+                "-Dfoo\"bar",
+            ]
+            @test f.libs == ["-lm"]
+        end
+    end
+
+    @testset "empty quoted .pc flag argument is kept" begin
+        mktempdir() do d
+            pc = joinpath(d, "emptyq.pc")
+            write(
+                pc, """
+                Name: emptyq
+                Cflags: -I "" /opt
+                Libs: -lm
+                """
+            )
+            f = AP.pkgconfig_flags(pc)
+            @test f.cflags == ["-I", "", "/opt"]
+        end
+    end
+
+    @testset "unclosed quote in .pc flags is refused" begin
+        mktempdir() do d
+            pc = joinpath(d, "unclosed.pc")
+            write(
+                pc, """
+                Name: unclosed
+                Cflags: -I"/opt/my dir
+                Libs: -lm
+                """
+            )
+            err = @test_throws ArgumentError AP.pkgconfig_flags(pc)
+            msg = sprint(showerror, err.value)
+            @test occursin(pc, msg)
+            @test occursin("quote", msg)
         end
     end
 
