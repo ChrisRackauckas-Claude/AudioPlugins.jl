@@ -140,7 +140,24 @@ end
         end
     end
 
-    @testset "bare -I/-L after expansion is refused" begin
+    @testset "detached -I/-L path form is kept" begin
+        mktempdir() do d
+            pc = joinpath(d, "detached.pc")
+            write(
+                pc, """
+                inc=/opt/inc
+                Name: detached
+                Cflags: -I \${inc} -DX=1
+                Libs: -L /opt/lib -lx
+                """
+            )
+            f = AP.pkgconfig_flags(pc)
+            @test f.cflags == ["-I", "/opt/inc", "-DX=1"]
+            @test f.libs == ["-L", "/opt/lib", "-lx"]
+        end
+    end
+
+    @testset "bare -I/-L without a path is refused" begin
         mktempdir() do d
             pc = joinpath(d, "bad.pc")
             write(
@@ -155,6 +172,41 @@ end
             msg = sprint(showerror, err.value)
             @test occursin(pc, msg)
             @test occursin("-I", msg)
+            @test occursin("no path argument", msg)
+        end
+    end
+
+    @testset "undefined .pc variable is refused" begin
+        mktempdir() do d
+            pc = joinpath(d, "typo.pc")
+            write(
+                pc, """
+                Name: typo
+                Cflags: -I\${missing}/include
+                Libs: -lm
+                """
+            )
+            err = @test_throws ArgumentError AP.pkgconfig_flags(pc)
+            msg = sprint(showerror, err.value)
+            @test occursin("missing", msg)
+            @test occursin(pc, msg)
+        end
+    end
+
+    @testset "explicitly empty .pc variable expands to empty" begin
+        mktempdir() do d
+            pc = joinpath(d, "emptyvar.pc")
+            write(
+                pc, """
+                empty=
+                Name: emptyvar
+                Cflags: -I\${empty}/include
+                Libs: -lm
+                """
+            )
+            f = AP.pkgconfig_flags(pc)
+            @test f.cflags == ["-I/include"]
+            @test f.libs == ["-lm"]
         end
     end
 
