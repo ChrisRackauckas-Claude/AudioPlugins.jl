@@ -597,12 +597,24 @@ end
     pkgconfig_flags(path) -> (; cflags::Vector{String}, libs::Vector{String})
 
 The `Cflags` and `Libs` (plus `Libs.private`, since the object is linked
-directly) of a `.pc` file, with `\${var}` references expanded from the
-file's own definitions. Reading the file directly avoids requiring the
-`pkg-config` binary, which a machine with a C compiler need not have.
+directly) of a `.pc` file, with `\${var}` references expanded from
+pkg-config's built-ins (`pcfiledir`, `pc_sysrootdir`, `pc_top_builddir`)
+and the file's own definitions. Reading the file directly avoids requiring
+the `pkg-config` binary, which a machine with a C compiler need not have.
+An undefined `\${var}` is an error (as in pkg-config). A bare `-I` or `-L`
+with no following path argument is refused: those option letters would
+swallow the next compiler argument and corrupt the link line. The detached
+form `-I /path` / `-L /path` is kept as two tokens, matching `cc`.
 """
 function pkgconfig_flags(path::AbstractString)
-    vars = Dict{String, String}()
+    # pkg-config predefines these before reading the file; see pkg-config(1).
+    # pc_sysrootdir is always "/": this reader does not emulate
+    # PKG_CONFIG_SYSROOT_DIR's rewrite of every -I/-L path.
+    vars = Dict{String, String}(
+        "pcfiledir" => dirname(abspath(path)),
+        "pc_sysrootdir" => "/",
+        "pc_top_builddir" => get(ENV, "PKG_CONFIG_TOP_BUILD_DIR", "\$(top_builddir)"),
+    )
     fields = Dict{String, String}()
     for raw in eachline(path)
         line = strip(first(split(raw, '#'; limit = 2)))
@@ -611,19 +623,156 @@ function pkgconfig_flags(path::AbstractString)
         m === nothing && continue
         name, sep, value = m.captures
         if sep == "="
-            vars[name] = _expand_pc(value, vars)
+            vars[name] = _expand_pc(value, vars, path)
         else
-            fields[name] = _expand_pc(value, vars)
+            fields[name] = _expand_pc(value, vars, path)
         end
     end
+    cflags = _pc_shell_split(get(fields, "Cflags", ""), path)
     libs = vcat(
-        Base.shell_split(get(fields, "Libs", "")),
-        Base.shell_split(get(fields, "Libs.private", ""))
+        _pc_shell_split(get(fields, "Libs", ""), path),
+        _pc_shell_split(get(fields, "Libs.private", ""), path)
     )
-    return (; cflags = Base.shell_split(get(fields, "Cflags", "")), libs)
+    _refuse_bare_pc_flags(path, cflags)
+    _refuse_bare_pc_flags(path, libs)
+    return (; cflags, libs)
 end
 
-_expand_pc(s, vars) = replace(s, r"\$\{([A-Za-z0-9_.]+)\}" => m -> get(vars, m[3:(end - 1)], ""))
+function _expand_pc(s, vars, path)
+    return replace(
+        s,
+        r"\$\{([A-Za-z0-9_.]+)\}" => m -> begin
+            name = m[3:(end - 1)]
+            haskey(vars, name) ||
+                throw(ArgumentError("Variable '$name' not defined in '$path'"))
+            vars[name]
+        end
+    )
+end
+
+# Outside quotes, `\` escapes whitespace, quotes, `\`, `$`, and backtick; any
+# other following character is kept with the backslash (so C:\Users\me survives).
+# Inside double quotes, `\` escapes only `"`, `\`, `$`, and backtick. Inside
+# single quotes, backslash is never an escape.
+_pc_shell_escape_outside(c) =
+    isspace(c) || c == '\'' || c == '"' || c == '\\' || c == '$' || c == '`'
+_pc_shell_escape_double(c) = c == '"' || c == '\\' || c == '$' || c == '`'
+
+"""
+    _pc_shell_split(s, path) -> Vector{String}
+
+Split a `.pc` `Cflags`/`Libs` line into arguments: whitespace separates
+tokens; single and double quotes group text (including empty `""`).
+Outside quotes, a backslash escapes the next character when it is
+whitespace, `'`, `"`, `\\`, `\$`, or backtick, and is otherwise kept.
+Inside double quotes, a backslash escapes only `"`, `\\`, `\$`, or
+backtick. Inside single quotes, backslash is literal. Unclosed quotes
+throw `ArgumentError` naming `path`.
+"""
+function _pc_shell_split(s::AbstractString, path::AbstractString)
+    out = String[]
+    buf = IOBuffer()
+    in_single = false
+    in_double = false
+    # True once a token has started, including an empty quoted `""`.
+    started = false
+
+    function flush_token!()
+        if started
+            push!(out, String(take!(buf)))
+            started = false
+        end
+        return
+    end
+
+    i = firstindex(s)
+    while i <= lastindex(s)
+        c = s[i]
+        if in_single
+            if c == '\''
+                in_single = false
+            else
+                write(buf, c)
+            end
+        elseif in_double
+            if c == '\\'
+                j = nextind(s, i)
+                if j <= lastindex(s)
+                    n = s[j]
+                    if n == '\n'
+                        # backslash-newline: line continuation
+                        i = j
+                    elseif _pc_shell_escape_double(n)
+                        write(buf, n)
+                        i = j
+                    else
+                        write(buf, c)
+                    end
+                else
+                    write(buf, c)
+                end
+            elseif c == '"'
+                in_double = false
+            else
+                write(buf, c)
+            end
+        elseif c == '\\'
+            j = nextind(s, i)
+            if j <= lastindex(s)
+                n = s[j]
+                if n == '\n'
+                    i = j
+                elseif _pc_shell_escape_outside(n)
+                    write(buf, n)
+                    started = true
+                    i = j
+                else
+                    write(buf, c)
+                    started = true
+                end
+            else
+                write(buf, c)
+                started = true
+            end
+        elseif c == '\''
+            in_single = true
+            started = true
+        elseif c == '"'
+            in_double = true
+            started = true
+        elseif isspace(c)
+            flush_token!()
+        else
+            write(buf, c)
+            started = true
+        end
+        i = nextind(s, i)
+    end
+    if in_single || in_double
+        kind = in_single ? "single" : "double"
+        throw(ArgumentError("$path: unterminated $kind quote in .pc flag line"))
+    end
+    flush_token!()
+    return out
+end
+
+function _refuse_bare_pc_flags(path, flags)
+    for i in eachindex(flags)
+        flag = flags[i]
+        if flag == "-I" || flag == "-L"
+            # Detached `-I path` / `-L path` is valid for cc; refuse only when
+            # there is no following path or the next token looks like an option.
+            if i == lastindex(flags) || startswith(flags[i + 1], "-")
+                throw(
+                    ArgumentError(
+                        "$path: bare $(repr(flag)) has no path argument"
+                    )
+                )
+            end
+        end
+    end
+    return
+end
 
 # ---------------------------------------------------------------------------
 # A Julia step's C view: the header juliac does not write

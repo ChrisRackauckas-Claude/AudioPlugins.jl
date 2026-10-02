@@ -120,6 +120,185 @@ end
         end
     end
 
+    @testset "relocatable .pc expands \${pcfiledir}" begin
+        mktempdir() do d
+            pc = joinpath(d, "g.pc")
+            write(
+                pc, """
+                prefix=\${pcfiledir}
+
+                Name: g
+                Description: relocatable step
+                Version: 0
+                Cflags: -I\${prefix}
+                Libs: -lm
+                """
+            )
+            f = AP.pkgconfig_flags(pc)
+            @test f.cflags == ["-I$(abspath(d))"]
+            @test f.libs == ["-lm"]
+        end
+    end
+
+    @testset "Windows-style backslash paths survive flag splitting" begin
+        # A `\` before a non-metacharacter is literal, so Windows-style
+        # prefixes keep their separators through flag splitting.
+        mktempdir() do d
+            pc = joinpath(d, "win.pc")
+            write(
+                pc, """
+                prefix=C:\\Users\\me\\proj
+                Name: win
+                Cflags: -I\${prefix}\\include
+                Libs: -L\${prefix}\\lib -lm
+                """
+            )
+            f = AP.pkgconfig_flags(pc)
+            @test f.cflags == ["-IC:\\Users\\me\\proj\\include"]
+            @test f.libs == ["-LC:\\Users\\me\\proj\\lib", "-lm"]
+        end
+    end
+
+    @testset "backslash escapes whitespace and quotes in .pc flags" begin
+        mktempdir() do d
+            pc = joinpath(d, "esc.pc")
+            write(
+                pc, """
+                Name: esc
+                Cflags: -DX=a\\ b -DFOO=\\"bar\\" -I/opt/my\\ dir/include -D"a\\\\b" -D"foo\\"bar"
+                Libs: -lm
+                """
+            )
+            f = AP.pkgconfig_flags(pc)
+            @test f.cflags == [
+                "-DX=a b",
+                "-DFOO=\"bar\"",
+                "-I/opt/my dir/include",
+                "-Da\\b",
+                "-Dfoo\"bar",
+            ]
+            @test f.libs == ["-lm"]
+        end
+    end
+
+    @testset "double-quoted backslash keeps space and single quote" begin
+        mktempdir() do d
+            pc = joinpath(d, "dq.pc")
+            write(
+                pc, """
+                Name: dq
+                Cflags: -D"a\\ b" -D"a\\'b"
+                Libs: -lm
+                """
+            )
+            f = AP.pkgconfig_flags(pc)
+            @test f.cflags == ["-Da\\ b", "-Da\\'b"]
+            @test f.libs == ["-lm"]
+        end
+    end
+
+    @testset "empty quoted .pc flag argument is kept" begin
+        mktempdir() do d
+            pc = joinpath(d, "emptyq.pc")
+            write(
+                pc, """
+                Name: emptyq
+                Cflags: -I "" /opt
+                Libs: -lm
+                """
+            )
+            f = AP.pkgconfig_flags(pc)
+            @test f.cflags == ["-I", "", "/opt"]
+        end
+    end
+
+    @testset "unclosed quote in .pc flags is refused" begin
+        mktempdir() do d
+            pc = joinpath(d, "unclosed.pc")
+            write(
+                pc, """
+                Name: unclosed
+                Cflags: -I"/opt/my dir
+                Libs: -lm
+                """
+            )
+            err = @test_throws ArgumentError AP.pkgconfig_flags(pc)
+            msg = sprint(showerror, err.value)
+            @test occursin(pc, msg)
+            @test occursin("quote", msg)
+        end
+    end
+
+    @testset "detached -I/-L path form is kept" begin
+        mktempdir() do d
+            pc = joinpath(d, "detached.pc")
+            write(
+                pc, """
+                inc=/opt/inc
+                Name: detached
+                Cflags: -I \${inc} -DX=1
+                Libs: -L /opt/lib -lx
+                """
+            )
+            f = AP.pkgconfig_flags(pc)
+            @test f.cflags == ["-I", "/opt/inc", "-DX=1"]
+            @test f.libs == ["-L", "/opt/lib", "-lx"]
+        end
+    end
+
+    @testset "bare -I/-L without a path is refused" begin
+        mktempdir() do d
+            pc = joinpath(d, "bad.pc")
+            write(
+                pc, """
+                empty=
+                Name: bad
+                Cflags: -I\${empty}
+                Libs: -lm
+                """
+            )
+            err = @test_throws ArgumentError AP.pkgconfig_flags(pc)
+            msg = sprint(showerror, err.value)
+            @test occursin(pc, msg)
+            @test occursin("-I", msg)
+            @test occursin("no path argument", msg)
+        end
+    end
+
+    @testset "undefined .pc variable is refused" begin
+        mktempdir() do d
+            pc = joinpath(d, "typo.pc")
+            write(
+                pc, """
+                Name: typo
+                Cflags: -I\${missing}/include
+                Libs: -lm
+                """
+            )
+            err = @test_throws ArgumentError AP.pkgconfig_flags(pc)
+            msg = sprint(showerror, err.value)
+            @test occursin("missing", msg)
+            @test occursin(pc, msg)
+        end
+    end
+
+    @testset "explicitly empty .pc variable expands to empty" begin
+        mktempdir() do d
+            pc = joinpath(d, "emptyvar.pc")
+            write(
+                pc, """
+                empty=
+                Name: emptyvar
+                Cflags: -I\${empty}/include
+                Libs: -lm
+                """
+            )
+            f = AP.pkgconfig_flags(pc)
+            @test f.cflags == ["-I/include"]
+            @test f.libs == ["-lm"]
+        end
+    end
+
     @testset "the rendered wrapper" begin
         mktempdir() do d
             w = AP.emit_wrapper(CLAP(), gain_spec, d)
