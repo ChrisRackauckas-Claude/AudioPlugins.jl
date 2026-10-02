@@ -181,6 +181,22 @@ end
         end
     end
 
+    @testset "double-quoted backslash keeps space and single quote" begin
+        mktempdir() do d
+            pc = joinpath(d, "dq.pc")
+            write(
+                pc, """
+                Name: dq
+                Cflags: -D"a\\ b" -D"a\\'b"
+                Libs: -lm
+                """
+            )
+            f = AP.pkgconfig_flags(pc)
+            @test f.cflags == ["-Da\\ b", "-Da\\'b"]
+            @test f.libs == ["-lm"]
+        end
+    end
+
     @testset "empty quoted .pc flag argument is kept" begin
         mktempdir() do d
             pc = joinpath(d, "emptyq.pc")

@@ -650,21 +650,24 @@ function _expand_pc(s, vars, path)
     )
 end
 
-# Characters that `\` escapes outside quotes and inside double quotes (glib
-# g_shell_parse_argv / Bourne). A `\` before any other character is kept, so
-# Windows paths like C:\Users\me survive.
-_pc_shell_escape_next(c) =
+# Outside quotes, `\` escapes whitespace, quotes, `\`, `$`, and backtick; any
+# other following character is kept with the backslash (so C:\Users\me survives).
+# Inside double quotes, `\` escapes only `"`, `\`, `$`, and backtick. Inside
+# single quotes, backslash is never an escape.
+_pc_shell_escape_outside(c) =
     isspace(c) || c == '\'' || c == '"' || c == '\\' || c == '$' || c == '`'
+_pc_shell_escape_double(c) = c == '"' || c == '\\' || c == '$' || c == '`'
 
 """
     _pc_shell_split(s, path) -> Vector{String}
 
 Split a `.pc` `Cflags`/`Libs` line into arguments: whitespace separates
-tokens; single and double quotes group text (including empty `""`); a
-backslash escapes the next character when that character is whitespace,
-`'`, `"`, `\\`, `\$`, or backtick — outside quotes and inside double
-quotes — and is kept literally otherwise and inside single quotes.
-Unclosed quotes throw `ArgumentError` naming `path`.
+tokens; single and double quotes group text (including empty `""`).
+Outside quotes, a backslash escapes the next character when it is
+whitespace, `'`, `"`, `\\`, `\$`, or backtick, and is otherwise kept.
+Inside double quotes, a backslash escapes only `"`, `\\`, `\$`, or
+backtick. Inside single quotes, backslash is literal. Unclosed quotes
+throw `ArgumentError` naming `path`.
 """
 function _pc_shell_split(s::AbstractString, path::AbstractString)
     out = String[]
@@ -699,7 +702,7 @@ function _pc_shell_split(s::AbstractString, path::AbstractString)
                     if n == '\n'
                         # backslash-newline: line continuation
                         i = j
-                    elseif _pc_shell_escape_next(n)
+                    elseif _pc_shell_escape_double(n)
                         write(buf, n)
                         i = j
                     else
@@ -719,7 +722,7 @@ function _pc_shell_split(s::AbstractString, path::AbstractString)
                 n = s[j]
                 if n == '\n'
                     i = j
-                elseif _pc_shell_escape_next(n)
+                elseif _pc_shell_escape_outside(n)
                     write(buf, n)
                     started = true
                     i = j
