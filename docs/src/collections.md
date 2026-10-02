@@ -88,10 +88,9 @@ lv2_open!(path; uri = "http://gareus.org/oss/lv2/nodelay",
 needs `worker:schedule`, which this host does not provide — it is in the artifact
 and enumerated by `lv2_scan`, but `lv2_open!` refuses it (53 of 54 open).
 
-Not packaged: dpl, fat1, meters, sisco, zconvo (GPL-3.0-or-later source; meters and
-sisco also need cairo/OpenGL); darc (sources are GPL-2.0-or-later, but its `COPYING`
-is GPLv3); and the GPL-2.0-or-later plugins that do not build headless (fil4, tuna,
-spectra, mixtri). dpl, fat1, darc and zconvo are packaged separately, as
+Not in `X42Plugins_jll`: meters and sisco (GPL-3.0-or-later source; also need
+cairo/OpenGL); and the GPL-2.0-or-later plugins that do not build headless (fil4,
+tuna, spectra, mixtri). darc, dpl, fat1 and zconvo ship under
 [X42PluginsGPL3](@ref X42PluginsGPL3-section) below.
 
 ### [X42PluginsGPL3](@id X42PluginsGPL3-section)
