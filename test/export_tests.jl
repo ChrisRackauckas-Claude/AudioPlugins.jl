@@ -93,6 +93,8 @@ end
         @test_throws ArgumentError spec(inputs = [StepInput("c", :clock)])
         @test_throws ArgumentError spec(inputs = [StepInput("u", :audio), StepInput("v", :audio)])
         @test_throws ArgumentError spec(params = [p(), p()])
+        @test_throws ArgumentError spec(sample_rate_field = "p", params = [p()])
+        @test_throws ArgumentError spec(sample_rate_field = "k", constants = ["k" => 1.0])
         @test_throws ArgumentError spec(source = "/nonexistent.c")
         @test_throws ArgumentError spec(base = "not an ident")
         @test_throws ArgumentError spec(constants = ["k" => "string"])
