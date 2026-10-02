@@ -30,7 +30,7 @@ preference, for the reason given under
 | Dragonfly Reverb | [dragonfly-reverb](https://github.com/michaelwillis/dragonfly-reverb) | GPL-3.0-or-later | Shipped: `DragonflyReverb_jll` 3.2.10 is registered and `lib/DragonflyReverb` is in this repository |
 | ZamPlugins | [zam-plugins](https://github.com/zamaudio/zam-plugins) | GPL-2.0-or-later for the sixteen plugins packaged; the upstream repository is not uniformly so (see below) | Shipped: `ZamPlugins_jll` 4.5.0 is registered and `lib/ZamPlugins` is in this repository |
 | x42-plugins | [x42-plugins](https://github.com/x42/x42-plugins) | GPL-2.0-or-later for the fourteen submodules packaged; the meta-repo is not uniformly so (see below) | Shipped: `X42Plugins_jll` and `lib/X42Plugins` — 54 headless LV2 plugins. LV2 collections are not `register_bundle!`'d; use `lv2_default_path(X42Plugins.lv2_dir())` |
-| x42-plugins, GPL-3.0-or-later part | [darc](https://github.com/x42/darc.lv2), [dpl](https://github.com/x42/dpl.lv2), [fat1](https://github.com/x42/fat1.lv2), [zconvo](https://github.com/x42/zconvo.lv2) | GPL-3.0-or-later (see below) | `X42PluginsGPL3_jll` and `lib/X42PluginsGPL3` — 13 headless LV2 plugins, 7 of which this host opens. `X42PluginsGPL3_jll` is not yet registered |
+| x42-plugins, GPL-3.0-or-later part | [darc](https://github.com/x42/darc.lv2), [dpl](https://github.com/x42/dpl.lv2), [fat1](https://github.com/x42/fat1.lv2), [zconvo](https://github.com/x42/zconvo.lv2) | GPL-3.0-or-later (see below) | Shipped: `X42Darc_jll`, `X42Dpl_jll`, `X42Fat1_jll`, `X42Zconvo_jll` and `lib/X42PluginsGPL3` — 13 headless LV2 plugins, 7 of which this host opens. Use `X42PluginsGPL3.lv2_path()` |
 
 "Proposed" means exactly that: no recipe, no JLL, no sublibrary, and no commitment that
 one is coming. It is the list from
@@ -98,13 +98,15 @@ spectra, mixtri). dpl, fat1, darc and zconvo are packaged separately, as
 
 The four x42-plugins submodules whose binaries are GPL-3.0-or-later, from the same pin
 `3fb6abe`, built headless: darc (compressor), dpl (digital peak limiter), fat1
-(autotune) and zconvo (zero-latency convolver) — **13** plugins. They are a separate
-JLL and sublibrary so that `X42Plugins` stays GPL-2.0-or-later.
+(autotune) and zconvo (zero-latency convolver) — **13** plugins. They ship as four
+JLLs (`X42Darc_jll`, `X42Dpl_jll`, `X42Fat1_jll`, `X42Zconvo_jll`) and one sublibrary
+so that `X42Plugins` stays GPL-2.0-or-later. Each JLL has its own `share/lv2`;
+[`lv2_path`](@ref) joins them (plus the LV2 specification bundles) for the host.
 
 ```julia
 using AudioPlugins, X42PluginsGPL3
 
-path = lv2_default_path(lv2_dir())
+path = lv2_path()
 lv2_scan(path)             # 13
 lv2_open!(path; uri = "http://gareus.org/oss/lv2/dpl#stereo",
           sample_rate = 48000, block_size = 256, channels = 2)

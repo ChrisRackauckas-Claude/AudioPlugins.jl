@@ -1,6 +1,6 @@
 # The sublibrary CI matrix: SublibraryCI.yml expands this file into one leg per
-# section x version. X42PluginsGPL3_jll is expected on Linux, macOS and Windows
-# where BinaryBuilder produces the artifact; declare all three OS legs.
+# section x version. The four X42* JLLs are expected on Linux, macOS and Windows
+# where BinaryBuilder produces the artifacts; declare all three OS legs.
 [Core]
 versions = ["lts", "1"]
 runner = "ubuntu-latest"

@@ -26,28 +26,30 @@ SOFTWARE.
 ## What this licence covers, and what it does not
 
 The MIT licence above covers **this package only**: the Julia source under `src/`, which
-is the handful of lines that expose the LV2 bundle directory to AudioPlugins. It covers
+is the handful of lines that expose the LV2 search path to AudioPlugins. It covers
 no binary.
 
-Installing this package pulls in `X42PluginsGPL3_jll`, whose binaries are licensed
-**GPL-3.0-or-later**, and loading those plugins into your Julia process means the
-effective terms of the running combination are the artifact's, not this file's: if you
-distribute a work that loads these plugins, GPL-3.0-or-later governs that work.
+Installing this package pulls in `X42Darc_jll`, `X42Dpl_jll`, `X42Fat1_jll` and
+`X42Zconvo_jll`, whose binaries are licensed **GPL-3.0-or-later**, and loading those
+plugins into your Julia process means the effective terms of the running combination are
+the artifacts', not this file's: if you distribute a work that loads these plugins,
+GPL-3.0-or-later governs that work.
 
-Per-component licences of what the artifact contains, read from each submodule's own
+Per-component licences of what the artifacts contain, read from each submodule's own
 `COPYING` and source headers at the pins of the x42-plugins meta-repo `3fb6abe`:
 
 | Component | Licence | Evidence |
 |---|---|---|
 | this package (`src/`, `test/`) | MIT | this file |
-| darc | GPL-3.0-or-later | `COPYING` is the GPLv3 text; `src/lv2.c` says "either version 2, or (at your option) any later version" |
-| dpl | GPL-3.0-or-later | `COPYING` is the GPLv3 text; `src/peaklim.{cc,h}` (Fons Adriaensen) say "version 3 … or (at your option) any later version"; the rest is v2-or-later |
-| fat1 | GPL-3.0-or-later | `COPYING` is the GPLv2 text, but `src/resampler*.{cc,h}` (zita-resampler, Fons Adriaensen) are v3-or-later; the rest is v2-or-later |
-| zconvo | GPL-3.0-or-later | `COPYING` is the GPLv2 text, but `src/zeta-convolver.{cc,h}` (a modified zita-convolver) are v3-or-later; the rest is v2-or-later |
+| darc (`X42Darc_jll`) | GPL-3.0-or-later | `COPYING` is the GPLv3 text; `src/lv2.c` says "either version 2, or (at your option) any later version" |
+| dpl (`X42Dpl_jll`) | GPL-3.0-or-later | `COPYING` is the GPLv3 text; `src/peaklim.{cc,h}` (Fons Adriaensen) say "version 3 … or (at your option) any later version"; the rest is v2-or-later |
+| fat1 (`X42Fat1_jll`) | GPL-3.0-or-later | `COPYING` is the GPLv2 text, but `src/resampler*.{cc,h}` (zita-resampler, Fons Adriaensen) are v3-or-later; the rest is v2-or-later |
+| zconvo (`X42Zconvo_jll`) | GPL-3.0-or-later | `COPYING` is the GPLv2 text, but `src/zeta-convolver.{cc,h}` (a modified zita-convolver) are v3-or-later; the rest is v2-or-later |
 | `FFTW_jll` (runtime, fat1 and zconvo) | GPL-2.0-or-later | FFTW's own licence |
 | `libsndfile_jll` (runtime, zconvo) | LGPL-2.1-or-later | libsndfile's own licence |
 | `libsamplerate_jll` (runtime, zconvo) | BSD-2-Clause | libsamplerate's own licence |
 
 GPL-2.0-or-later, LGPL-2.1-or-later and BSD-2-Clause code all combine with
-GPL-3.0-or-later code as GPL-3.0-or-later, which is what the artifact as a whole is. The
-artifact carries each plugin's `COPYING` under `share/licenses/X42PluginsGPL3/`.
+GPL-3.0-or-later code as GPL-3.0-or-later, which is what each artifact as a whole is.
+Each artifact carries its plugin's `COPYING` under `share/licenses/X42Darc/`,
+`X42Dpl/`, `X42Fat1/` or `X42Zconvo/`.
